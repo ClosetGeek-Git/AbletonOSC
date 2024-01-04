@@ -85,12 +85,30 @@ class OSCServer:
             self.logger.error("AbletonOSC: OSC build error: %s" % (traceback.format_exc()))
 
     def process_message(self, message, remote_addr):
+        params = list(message.params)
+        custom = None
+        
+        try:
+            index = params.index(None)
+            custom = params[index + 1:]
+            params = params[:index]
+            params = tuple(params)
+        except ValueError:
+            params = tuple(params)
+
         if message.address in self._callbacks:
             callback = self._callbacks[message.address]
-            rv = callback(message.params)
+            rv = callback(params)
 
             if rv is not None:
                 assert isinstance(rv, tuple)
+                
+                if custom is not None:
+                    rv = list(rv)
+                    rv.append(None)
+                    rv.append(custom)
+                    rv = tuple(rv)
+
                 remote_hostname, _ = remote_addr
                 response_addr = (remote_hostname, self._response_port)
                 self.send(address=message.address,
