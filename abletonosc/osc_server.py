@@ -86,15 +86,15 @@ class OSCServer:
 
     def process_message(self, message, remote_addr):
         params = list(message.params)
-        custom = None
         
         try:
             index = params.index(None)
             custom = params[index + 1:]
             params = params[:index]
-            params = tuple(params)
+            #params = tuple(params)
         except ValueError:
-            params = tuple(params)
+            custom = None
+            #params = tuple(params)
 
         if message.address in self._callbacks:
             callback = self._callbacks[message.address]
