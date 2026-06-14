@@ -42,14 +42,14 @@ class AbletonOSCHandler(Component):
             #--------------------------------------------------------------------------------
             value = None
         self.logger.info("Getting property for %s: %s = %s" % (self.class_identifier, prop, value))
-        return value,
+        return (value, *params)
 
     def _start_listen(self, target, prop, params: Optional[Tuple] = (), getter = None) -> None:
         """
         Start listening for the property named `prop` on the Live object `target`.
         `params` is typically a tuple containing the track/clip index.
 
-        getter can be used for a customer getter when we're accesing native objects
+        getter can be used for a customer getter when we're accessing native objects
         e.g. in view.py we don't return the selected_scene, but the selected_scene index.
 
         Args:
@@ -100,7 +100,7 @@ class AbletonOSCHandler(Component):
                 # Ignore as it is benign.
                 #--------------------------------------------------------------------------------
                 self.logger.info("Exception whilst removing listener (likely benign): %s" % e)
-                
+
             del self.listener_functions[listener_key]
             del self.listener_objects[listener_key]
         else:

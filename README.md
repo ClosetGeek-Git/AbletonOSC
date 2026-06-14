@@ -1,19 +1,16 @@
-# AbletonOSC: Control Ableton Live 11 with OSC
+# AbletonOSC: Control Ableton Live with OSC
 
 [![stability-beta](https://img.shields.io/badge/stability-beta-33bbff.svg)](https://github.com/mkenney/software-guides/blob/master/STABILITY-BADGES.md#beta)
 
-AbletonOSC is a MIDI remote script that provides an Open Sound Control (OSC) interface to
-control [Ableton Live 11](https://www.ableton.com/en/live/). Building on ideas from the
-older [LiveOSC](https://github.com/hanshuebner/LiveOSC) scripts, its aim is to expose the
+AbletonOSC is a MIDI remote script that provides an [Open Sound Control (OSC)](https://ccrma.stanford.edu/groups/osc/) interface to
+control [Ableton Live](https://www.ableton.com/en/live/). The project's aim is to expose the
 entire [Live Object Model](https://docs.cycling74.com/max8/vignettes/live_object_model) API
 ([full API docs](https://structure-void.com/PythonLiveAPI_documentation/Live11.0.xml)), providing comprehensive control
 over Live's control interfaces using the same naming structure and object hierarchy as LOM.
 
-**NOTE: Since 2022-12-17, all getters have been modified to return the ID of the object being queried as well as the return value**, for consistency with listeners. For example, `/live/clip/get/name` will return `track_id, clip_id, name`.
-
 # Installation
 
-AbletonOSC requires Ableton Live 11 or above, and does not support earlier versions.
+AbletonOSC requires Ableton Live 11 or above.
 
 To install the script:
 
@@ -34,6 +31,38 @@ Activity logs will be output to a `logs` subdirectory. Logging granularity can b
 AbletonOSC listens for OSC messages on port **11000**, and sends replies on port **11001**. Replies will be sent to the
 same IP as the originating message. When querying properties, OSC wildcard patterns can be used; for example, `/live/clip/get/* 0 0` will query all the properties of track 0, clip 0.
 
+### Request correlation (optional)
+
+Because OSC is transport over UDP and replies are matched only by address, it can be hard to pair a reply with the
+request that caused it when several requests are in flight — particularly when querying the same address concurrently.
+AbletonOSC supports an **optional, opt-in correlation marker** for this.
+
+To use it, prepend a single string argument of the form `@id:<token>` as the **first** parameter of your request. The
+server strips this marker before dispatching to the handler and re-prepends the identical string to the reply, so you
+can match the two up:
+
+```
+REQUEST  /live/clip/get/is_playing   "@id:42"  0 0
+REPLY    /live/clip/get/is_playing   "@id:42"  0 0 True
+```
+
+A correlated **command** (`/live/.../set/...` or a method) — which normally sends no reply — instead sends a
+marker-only acknowledgement, so you can confirm it completed:
+
+```
+REQUEST  /live/song/set/tempo   "@id:7"   125.0
+REPLY    /live/song/set/tempo   "@id:7"
+```
+
+Notes:
+- The feature is entirely opt-in. Requests without an `@id:` marker behave exactly as before, and non-correlated
+  commands still send no reply.
+- The `@id:` leading-string namespace is **reserved**: don't send a literal string beginning with `@id:` as the first
+  argument of a request unless you intend it as a correlation marker.
+- Correlation makes a reply *attributable*, not *guaranteed*: a reply lost on the network still times out.
+- The bundled Python client (`client/client.py`) uses this automatically — `client.query(...)` is safe to call
+  concurrently, including for the same address.
+
 ## Application API
 
 <details>
@@ -46,6 +75,7 @@ same IP as the originating message. When querying properties, OSC wildcard patte
 | /live/api/reload              |              |                              | Initiates a live reload of the AbletonOSC server code. Used in development only.         |
 | /live/api/get/log_level       |              | log_level                    | Returns the current log level. Default is `info`.                                        |
 | /live/api/set/log_level       | log_level    |                              | Set the log level, which can be one of: `debug`, `info`, `warning`, `error`, `critical`. |
+| /live/api/show_message        | message      |                              | Show a message in Live's status bar                                                      |
 
 ### Application status messages
 
@@ -78,6 +108,8 @@ Represents the top-level Song object. Used to start/stop playback, create/modify
 | /live/song/create_return_track    |              |                 | Create a new return track                                                                |
 | /live/song/create_scene           | index        |                 | Create a new scene at the specified index (-1 = end of list)                             |
 | /live/song/cue_point/jump         | cue_point    |                 | Jump to a specific cue point, by name or numeric index (based on the list of cue points) |
+| /live/song/cue_point/add_or_delete |             |                 | Add a cue point under the cursor, or, if one exists, delete it |
+| /live/song/cue_point/set/name         | cue_point    |                 | Rename a cue point, given its index |
 | /live/song/delete_scene           | scene_index  |                 | Delete a scene                                                                           |
 | /live/song/delete_return_track    | track_index  |                 | Delete a return track                                                                    |
 | /live/song/delete_track           | track_index  |                 | Delete a track                                                                           |
@@ -123,7 +155,10 @@ for [Live Object Model - Song](https://docs.cycling74.com/max8/vignettes/live_ob
 | /live/song/get/punch_in                    |              | punch_in                    | Query punch in                                    |
 | /live/song/get/punch_out                   |              | punch_out                   | Query punch out                                   |
 | /live/song/get/record_mode                 |              | record_mode                 | Query the current record mode                     |
+| /live/song/get/root_note                 |              | root_note                 | Query the current root note                     |
+| /live/song/get/scale_name                 |              | scale_name                 | Query the current scale name                     |
 | /live/song/get/session_record              |              | session_record              | Query whether session record is enabled           |
+| /live/song/get/session_record_status       |              | session_record_status       | Query the current session record status           |
 | /live/song/get/signature_denominator       |              | denominator                 | Query the current time signature's denominator    |
 | /live/song/get/signature_numerator         |              | numerator                   | Query the current time signature's numerator      |
 | /live/song/get/song_length                 |              | song_length                 | Query the song arrangement length, in beats       |
@@ -204,9 +239,11 @@ Represents the view (user interface) of live
 | /live/view/get/selected_scene          |                          | scene_index              | Returns the selected scene index (first scene = 0)      |
 | /live/view/get/selected_track          |                          | track_index              | Returns the selected index track (first track = 0)      |
 | /live/view/get/selected_clip           |                          | track_index, scene_index | Returns the track and scene index of the selected clip  |
+| /live/view/get/selected_device         |                          | track_index, device_index| Get the selected device (first device = 0)              |
 | /live/view/set/selected_scene          | scene_index              |                          | Set the selected scene (first scene = 0)                |
 | /live/view/set/selected_track          | track_index              |                          | Set the selected track (first track = 0)                |
 | /live/view/set/selected_clip           | track_index, scene_index |                          | Set the selected clip                                   |
+| /live/view/set/selected_device         | track_index, device_index|                          | Set the selected device (first device = 0)              |
 | /live/view/start_listen/selected_scene |                          | selected_scene           | Start listening to the selected scene (first scene = 0) |
 | /live/view/start_listen/selected_track |                          | selected_track           | Start listening to selected track (first track = 0)     |
 | /live/view/stop_listen/selected_scene  |                          |                          | Stop listening to the selected scene (first scene = 0)  |
@@ -326,6 +363,7 @@ A Clip Slot represents a container for a clip. It is used to create and delete c
 
 | Address                             | Query params                                                   | Response params                          | Description                                     |
 |:------------------------------------|:---------------------------------------------------------------|:-----------------------------------------|:------------------------------------------------|
+| /live/clip_slot/fire                | track_index, clip_index                                        |                                          | Fire play/pause of the specified clip slot      |
 | /live/clip_slot/create_clip         | track_index, clip_index, length                                |                                          | Create a clip in the slot                       |
 | /live/clip_slot/delete_clip         | track_index, clip_index                                        |                                          | Delete the clip in the slot                     |
 | /live/clip_slot/get/has_clip        | track_index, clip_index                                        | track_index, clip_index, has_clip        | Query whether the slot has a clip               |
@@ -354,11 +392,15 @@ Represents an audio or MIDI clip. Can be used to start/stop clips, and query/mod
 | /live/clip/remove/notes                  | [start_pitch, pitch_span, start_time, time_span]                    |                                                                                        | Remove notes from a clip in a range of pitches and times. If no ranges specified, all notes are removed. Note that ordering has changed as of 2023-11.   |
 | /live/clip/get/color                     | track_id, clip_id                                                   | track_id, clip_id, color                                                               | Get clip color                                                                                                                                           |
 | /live/clip/set/color                     | track_id, clip_id, color                                            |                                                                                        | Set clip color                                                                                                                                           |
+| /live/clip/get/color_index               | track_id, clip_id                                                   | track_id, clip_id, color_index                                                               | Get clip color index (0-69)                                                                                                                                           |
+| /live/clip/set/color_index               | track_id, clip_id, color_index                                      |                                                                                        | Set clip color index (0-69)                                                                                                                                          |
 | /live/clip/get/name                      | track_id, clip_id                                                   | track_id, clip_id, name                                                                | Get clip name                                                                                                                                            |
 | /live/clip/set/name                      | track_id, clip_id, name                                             |                                                                                        | Set clip name                                                                                                                                            |
 | /live/clip/get/gain                      | track_id, clip_id                                                   | track_id, clip_id, gain                                                                | Get clip gain                                                                                                                                            |
 | /live/clip/set/gain                      | track_id, clip_id, gain                                             |                                                                                        | Set clip gain                                                                                                                                            |
 | /live/clip/get/length                    | track_id, clip_id                                                   | track_id, clip_id, length                                                              | Get clip length                                                                                                                                          |
+| /live/clip/get/sample_length              | track_id, clip_id                                                   | track_id, clip_id, sample_length                                                           | Get clip sample length                                                                                                                                 |
+| /live/clip/get/start_time              | track_id, clip_id                                                   | track_id, clip_id, start_time                                                           | Get clip start time                                                                                                                                 |
 | /live/clip/get/pitch_coarse              | track_id, clip_id                                                   | track_id, clip_id, semitones                                                           | Get clip coarse re-pitch                                                                                                                                 |
 | /live/clip/set/pitch_coarse              | track_id, clip_id, semitones                                        |                                                                                        | Set clip coarse re-pitch                                                                                                                                 |
 | /live/clip/get/pitch_fine                | track_id, clip_id                                                   | track_id, clip_id, cents                                                               | Get clip fine re-pitch                                                                                                                                   |
@@ -367,7 +409,9 @@ Represents an audio or MIDI clip. Can be used to start/stop clips, and query/mod
 | /live/clip/get/is_audio_clip             | track_id, clip_id                                                   | track_id, clip_id, is_audio_clip                                                       | Query whether clip is audio                                                                                                                              |
 | /live/clip/get/is_midi_clip              | track_id, clip_id                                                   | track_id, clip_id, is_midi_clip                                                        | Query whether clip is MIDI                                                                                                                               |
 | /live/clip/get/is_playing                | track_id, clip_id                                                   | track_id, clip_id, is_playing                                                          | Query whether clip is playing                                                                                                                            |
+| /live/clip/get/is_overdubbing                | track_id, clip_id                                                   | track_id, clip_id, is_overdubbing                                                          | Query whether clip is overdubbing                                                                                                                            |
 | /live/clip/get/is_recording              | track_id, clip_id                                                   | track_id, clip_id, is_recording                                                        | Query whether clip is recording                                                                                                                          |
+| /live/clip/get/will_record_on_start                | track_id, clip_id                                                   | track_id, clip_id, will_record_on_start                                                          | Query whether clip will record on start                                                                                                                            |
 | /live/clip/get/playing_position          | track_id, clip_id                                                   | track_id, clip_id, playing_position                                                    | Get clip's playing position                                                                                                                              |
 | /live/clip/start_listen/playing_position | track_id, clip_id                                                   |                                                                                        | Start listening for clip's playing position. Replies are sent to /live/clip/get/playing_position, with args: track_id, clip_id, playing_position         |
 | /live/clip/stop_listen/playing_position  | track_id, clip_id                                                   |                                                                                        | Stop listening for clip's playing position.                                                                                                              |
@@ -377,10 +421,80 @@ Represents an audio or MIDI clip. Can be used to start/stop clips, and query/mod
 | /live/clip/set/loop_end                  | track_id, clip_id, loop_end                                         |                                                                                        | Set clip's loop end                                                                                                                                      |
 | /live/clip/get/warping                   | track_id, clip_id                                                   | track_id, clip_id, warping                                                             | Get clip's warp mode                                                                                                                                     |
 | /live/clip/set/warping                   | track_id, clip_id, warping                                          |                                                                                        | Set clip's warp mode                                                                                                                                     |
+| /live/clip/get/launch_mode                   | track_id, clip_id                                                   | track_id, clip_id, launch_mode                                                             | Get clip's launch mode (0=Trigger, 1=Gate, 2=Toggle, 3=Repeat)                                                                                                                                    |
+| /live/clip/set/launch_mode                   | track_id, clip_id, launch_mode                                          |                                                                                        | Set clip's launch mode (0=Trigger, 1=Gate, 2=Toggle, 3=Repeat)                                                                                                                                     |
+| /live/clip/get/launch_quantization                   | track_id, clip_id                                                   | track_id, clip_id, launch_quantization                                                             | Get clip's launch Quantization Value (0=Global, 1=None, 2=8Bars, 3=4Bars, 4=2Bars, 5=1Bar, 6=1/2, 7=1/2T, 8=1/4, 9=1/4T, 10=1/8, 11=1/8T, 12=1/16, 13=1/16T, 14=1/32)                                                                                                                                    |
+| /live/clip/set/launch_quantization                   | track_id, clip_id, launch_quantization                                          |                                                                                        | Set clip's launch Quantization Value (0=Global, 1=None, 2=8Bars, 3=4Bars, 4=2Bars, 5=1Bar, 6=1/2, 7=1/2T, 8=1/4, 9=1/4T, 10=1/8, 11=1/8T, 12=1/16, 13=1/16T, 14=1/32)                                                                                                                                     |
+| /live/clip/get/ram_mode                   | track_id, clip_id                                                   | track_id, clip_id, ram_mode                                                             | Get clip's Ram Mode (0=False, 1=True)                                                                                                      |
+| /live/clip/set/ram_mode                   | track_id, clip_id, ram_mode                                          |                                                                                        | Set clip's Ram Mode (0=False, 1=True)                                                                                                                                     |
+| /live/clip/get/warp_mode                   | track_id, clip_id                                                   | track_id, clip_id, warp_mode                                                             | Get clip's Warp Mode (0=Beats, 1=Tones, 2=Texture, 3=Re-Pitch, 4=Complex, 5=Invalid/Error, 6=Pro)                                                                                                     |
+| /live/clip/set/warp_mode                   | track_id, clip_id, warp_mode                                          |                                                                                        | Set clip's Warp Mode (0=Beats, 1=Tones, 2=Texture, 3=Re-Pitch, 4=Complex, 5=Invalid/Error, 6=Pro)                                                                                                                                    |
+| /live/clip/get/has_groove                   | track_id, clip_id                                                   | track_id, clip_id, has_groove                                                             | Get clip Groove state (0=False, 1=True)
+| /live/clip/get/legato                   | track_id, clip_id                                                   | track_id, clip_id, legato                                                             | Get clip's Legato state (0=False, 1=True)                                                                                                      |
+| /live/clip/set/legato                   | track_id, clip_id, legato                                          |                                                                                        | Set clip's Legato state (0=False, 1=True)                                                                                                                                     |
+| /live/clip/get/position                   | track_id, clip_id                                                   | track_id, clip_id, position                                                             | Get clip's position (LoopStart)                                                                                                     |
+| /live/clip/set/position                   | track_id, clip_id, position                                          |                                                                                        | Set clip's position (LoopStart)                                                                                                                                     |
+| /live/clip/get/muted                   | track_id, clip_id                                                   | track_id, clip_id, muted                                                             | Get clip's Muted state (0=False, 1=True)                                                                                                      |
+| /live/clip/set/muted                   | track_id, clip_id, muted                                          |                                                                                        | Set clip's Muted state (0=False, 1=True)                                                                                                                                     |
+| /live/clip/get/velocity_amount              | track_id, clip_id                                                   | track_id, clip_id, velocity_amount                                                       | Get clip's Velocity Amount (0.0-1.0 aka 0% to 100%)                                                                                                                                  |
+| /live/clip/set/velocity_amount              | track_id, clip_id, velocity_amount                                     |                                                                                        | Set clip's Velocity Amount (0.0-1.0 aka 0% to 100%)                                                                                               |
 | /live/clip/get/start_marker              | track_id, clip_id                                                   | track_id, clip_id, start_marker                                                        | Get clip's start marker                                                                                                                                  |
 | /live/clip/set/start_marker              | track_id, clip_id, start_marker                                     |                                                                                        | Set clip's start marker, expressed in floating-point beats                                                                                               |
 | /live/clip/get/end_marker                | track_id, clip_id                                                   | track_id, clip_id, end_marker                                                          | Get clip's end marker                                                                                                                                    |
 | /live/clip/set/end_marker                | track_id, clip_id, end_marker                                       |                                                                                        | Set clip's end marker, expressed in floating-point beats                                                                                                 |
+
+</details>
+
+---
+
+## Scene API
+
+Represents a scene, used to trigger a row of clips simultaneously. A scene's name, color, tempo and time signature can all be set and queried.
+
+<details>
+<summary><b>Documentation</b>: Scene API</summary>
+
+### Scene methods
+
+| Address                         | Query params | Response params | Description             |
+|:--------------------------------|:-------------|:----------------|:------------------------|
+| /live/scene/fire                | scene_id     |                 | Trigger the given scene |
+| /live/scene/fire_as_selected    | scene_id     |                 | Trigger the scene and select the next scene |
+| /live/scene/fire_selected       |              |                 | Trigger the selected scene and select the next scene |
+
+### Scene properties
+
+ - Changes for any Scene property can be listened for by calling `/live/scene/start_listen/<property> <scene_index>`
+ - Responses will be sent to `/live/scene/get/<property>`, with parameters `<scene_index> <property_value>`
+
+#### Getters
+
+| Address                      | Query params      | Response params            | Description                                       |
+|:-----------------------------|:------------------|:---------------------------|:--------------------------------------------------|
+| /live/scene/get/color        | scene_id          | scene_id, color            | Query scene color                      |
+| /live/scene/get/color_index  | scene_id          | scene_id, color_index      | Query scene color index                |
+| /live/scene/get/is_empty        | scene_id          | scene_id, is_empty            | Query whether scene is empty                      |
+| /live/scene/get/is_triggered        | scene_id          | scene_id, is_triggered            | Query whether scene is in triggered state  |
+| /live/scene/get/name         | scene_id          | scene_id, name             | Query scene name                      |
+| /live/scene/get/tempo        | scene_id          | scene_id, tempo            | Query scene tempo |
+| /live/scene/get/tempo_enabled       | scene_id          | scene_id, tempo_enabled            | Query whether scene tempo is enabled |
+| /live/scene/get/time_signature_numerator        | scene_id          | scene_id, numerator            | Query scene time signature numerator  |
+| /live/scene/get/time_signature_denominator        | scene_id          | scene_id, denominator            | Query scene time signature denominator |
+| /live/scene/get/time_signature_enabled        | scene_id          | scene_id, enabled            | Query whether scene time signature is enabled |
+
+#### Setters
+
+| Address                                        | Query params             | Response params | Description                                  |
+|:-----------------------------------------------|:-------------------------|:----------------|:---------------------------------------------|
+| /live/scene/set/name                           | scene_id, name           |                 | Set scene name                               |
+| /live/scene/set/color                          | scene_id, color          |                 | Set scene color                              |
+| /live/scene/set/color_index                    | scene_id, color_index    |                 | Set scene color_index                        |
+| /live/scene/set/tempo                          | scene_id, tempo          |                 | Set scene tempo                              |
+| /live/scene/set/tempo_enabled                  | scene_id, tempo_enabled  |                 | Set whether scene tempo is enabled           |
+| /live/scene/set/time_signature_numerator       | scene_id, numerator      |                 | Set scene time signature numerator           |
+| /live/scene/set/time_signature_denominator     | scene_id, denominator    |                 | Set scene time signature denominator         |
+| /live/scene/set/time_signature_enabled         | scene_id, enabled        |                 | Set whether scene time signature is enabled  |
+
 
 </details>
 
@@ -392,6 +506,10 @@ Represents an instrument or effect.
 
 <details>
 <summary><b>Documentation</b>: Device API</summary>
+
+### Device properties
+
+- Changes for any Parameter property can be listened for by calling `/live/device/start_listen/parameter/value <track_index> <device index> <parameter_index>`
 
 | Address                                  | Query params                             | Response params                          | Description                                                                             |
 |:-----------------------------------------|:-----------------------------------------|:-----------------------------------------|:----------------------------------------------------------------------------------------|
@@ -406,6 +524,7 @@ Represents an instrument or effect.
 | /live/device/get/parameters/is_quantized | track_id, device_id                      | track_id, device_id, [value, ...]        | Get the list of is_quantized settings (i.e., whether the parameter must be an int/bool) |
 | /live/device/set/parameters/value        | track_id, device_id, value, value ...    |                                          | Set the device parameter values                                                         |
 | /live/device/get/parameter/value         | track_id, device_id, parameter_id        | track_id, device_id, parameter_id, value | Get a device parameter value                                                            |
+| /live/device/get/parameter/value_string  | track_id, device_id, parameter_id        | track_id, device_id, parameter_id, value | Get the device parameter value as a readable string ex: 2500 Hz                         |
 | /live/device/set/parameter/value         | track_id, device_id, parameter_id, value |                                          | Set a device parameter value                                                            |
 
 For devices:
@@ -417,7 +536,28 @@ For devices:
 
 </details>
 
- ---
+
+---
+
+## MidiMap API
+
+Can be used to create assignments between MIDI CC and Live parameters.
+
+<details>
+<summary><b>Documentation</b>: MidiMap API</summary>
+
+### MidiMap methods
+
+| Address                | Query params | Response params | Description             |
+|:-----------------------|:-------------|:----------------|:------------------------|
+| /live/midimap/map_cc   | track_id, device_id, param_id, channel, cc     |  | Create an assignment such that control change `cc` on channel `channel` will control the specified parameter. |
+                                                |
+
+Note that, for consistency with other object types (and Live's internal API), **channels are indexed from zero** - so MIDI channel 1 should be queried with index `0`, etc.
+
+</details>
+
+---
 
 # Utilities
 
@@ -436,7 +576,7 @@ Usage: /live/osc/command [params]
 
 # Acknowledgements
 
-Thanks to [Stu Fisher](https://github.com/stufisher/) (and other authors) for LiveOSC, the spiritual predecessor to this
+Thanks to [Stu Fisher](https://github.com/stufisher/) (and other authors) for [LiveOSC](https://livecontrol.q3f.org/ableton-liveapi/liveosc/), the spiritual predecessor to this
 library. Thanks to [Julien Bayle](https://structure-void.com/ableton-live-midi-remote-scripts/#liveAPI)
 and [NSUSpray](https://nsuspray.github.io/Live_API_Doc/) for providing XML API docs, based on original work
 by [Hanz Petrov](http://remotescripts.blogspot.com/p/support-files.html).
@@ -448,4 +588,5 @@ For code contributions and feedback, many thanks to:
 - Marco Buongiorno Nardelli ([marcobn](https://github.com/marcobn)) and Colin Stokes
 - Mark Marijnissen ([markmarijnissen](https://github.com/markmarijnissen))
 - [capturcus](https://github.com/capturcus)
+- Esa Ruoho a.k.a. Lackluster ([esaruoho](https://github.com/esaruoho))
 

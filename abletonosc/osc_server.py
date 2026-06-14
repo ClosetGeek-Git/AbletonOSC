@@ -10,6 +10,19 @@ import socket
 import logging
 import traceback
 
+#--------------------------------------------------------------------------------
+# Optional request-correlation marker.
+#
+# A client may prepend a single reserved string argument of the form
+# "@id:<token>" as the first OSC param of a request. The server strips it before
+# dispatching to any handler and re-prepends the identical string to the reply,
+# so clients can correlate replies (and command acknowledgements) with concurrent
+# in-flight requests. Clients that don't use it are entirely unaffected.
+#
+# Defined at module level so it survives importlib.reload() on /live/api/reload.
+#--------------------------------------------------------------------------------
+CORRELATION_PREFIX = "@id:"
+
 class OSCServer:
     def __init__(self,
                  local_addr: Tuple[str, int] = ('0.0.0.0', OSC_LISTEN_PORT),
@@ -84,24 +97,59 @@ class OSCServer:
         except BuildError:
             self.logger.error("AbletonOSC: OSC build error: %s" % (traceback.format_exc()))
 
+    def _reply(self, address, rv, corr, remote_addr):
+        """
+        Send a reply for an incoming message.
+
+        If the request carried a correlation marker (`corr`), it is re-prepended
+        so the client can match this reply to the request that caused it. Replies
+        are addressed to the host that sent the request (not the shared default
+        remote address), so correlated request/response works per-client.
+        """
+        assert isinstance(rv, tuple)
+        if corr is not None:
+            rv = (corr, *rv)
+        remote_hostname, _ = remote_addr
+        response_addr = (remote_hostname, self._response_port)
+        self.send(address=address, params=rv, remote_addr=response_addr)
+
     def process_message(self, message, remote_addr):
+        #--------------------------------------------------------------------------------
+        # Optional request correlation: strip a leading "@id:<token>" marker (if
+        # present) before any handler runs, and re-prepend it to the reply via
+        # _reply(). See CORRELATION_PREFIX above.
+        #
+        # Note: `params` is intentionally left as a list. Do not normalise it to a
+        # tuple centrally without also fixing track.py's create_track_callback,
+        # which does `[track_index] + params[1:]` (list + slice) and would raise
+        # TypeError on a tuple.
+        #--------------------------------------------------------------------------------
+        params = list(message.params)
+        corr = None
+        if params and isinstance(params[0], str) and params[0].startswith(CORRELATION_PREFIX):
+            corr = params[0]
+            params = params[1:]
+
         if message.address in self._callbacks:
             callback = self._callbacks[message.address]
-            rv = callback(message.params)
+            rv = callback(params)
 
             if rv is not None:
-                assert isinstance(rv, tuple)
-                remote_hostname, _ = remote_addr
-                response_addr = (remote_hostname, self._response_port)
-                self.send(address=message.address,
-                          params=rv,
-                          remote_addr=response_addr)
+                self._reply(message.address, rv, corr, remote_addr)
+            elif corr is not None:
+                #--------------------------------------------------------------------------------
+                # Marker-gated acknowledgement: set/method handlers return None and
+                # normally send no reply. When the request is correlated, send an
+                # empty-payload ack so the client can confirm completion instead of
+                # timing out. Non-correlated commands still produce no reply.
+                #--------------------------------------------------------------------------------
+                self._reply(message.address, (), corr, remote_addr)
         elif "*" in message.address:
             regex = message.address.replace("*", "[^/]+")
             for callback_address, callback in self._callbacks.items():
                 if re.match(regex, callback_address):
                     try:
-                        rv = callback(message.params)
+                        rv = callback(params)
                     except ValueError:
                         #--------------------------------------------------------------------------------
                         # Don't throw errors for queries that require more arguments
@@ -115,12 +163,7 @@ class OSCServer:
                         #--------------------------------------------------------------------------------
                         continue
                     if rv is not None:
-                        assert isinstance(rv, tuple)
-                        remote_hostname, _ = remote_addr
-                        response_addr = (remote_hostname, self._response_port)
-                        self.send(address=callback_address,
-                                  params=rv,
-                                  remote_addr=response_addr)
+                        self._reply(callback_address, rv, corr, remote_addr)
         else:
             self.logger.error("AbletonOSC: Unknown OSC address: %s" % message.address)
 
@@ -132,15 +175,18 @@ class OSCServer:
                 self.process_message(i, remote_addr)
 
     def parse_bundle(self, data, remote_addr):
-        bundle = OscBundle(data)
-        if bundle.num_contents == 0:
+        if OscBundle.dgram_is_bundle(data):
+            try:
+                bundle = OscBundle(data)
+                self.process_bundle(bundle, remote_addr)
+            except ParseError:
+                self.logger.error("AbletonOSC: Error parsing OSC bundle: %s" % (traceback.format_exc()))
+        else:
             try:
                 message = OscMessage(data)
                 self.process_message(message, remote_addr)
             except ParseError:
-                self.logger.error("AbletonOSC: OSC parse error: %s" % (traceback.format_exc()))
-        else:
-            self.process_bundle(bundle, remote_addr)
+                self.logger.error("AbletonOSC: Error parsing OSC message: %s" % (traceback.format_exc()))
 
     def process(self) -> None:
         """

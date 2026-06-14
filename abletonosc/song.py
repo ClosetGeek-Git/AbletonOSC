@@ -18,6 +18,7 @@ class SongHandler(AbletonOSCHandler):
         # Callbacks for Song: methods
         #--------------------------------------------------------------------------------
         for method in [
+            "capture_and_insert_scene",
             "capture_midi",
             "continue_playing",
             "create_audio_track",
@@ -29,10 +30,13 @@ class SongHandler(AbletonOSCHandler):
             "delete_track",
             "duplicate_scene",
             "duplicate_track",
+            "force_link_beat_time",
             "jump_by",
             "jump_to_prev_cue",
             "jump_to_next_cue",
             "redo",
+            "re_enable_automation",
+            "set_or_delete_cue",
             "start_playing",
             "stop_all_clips",
             "stop_playing",
@@ -52,6 +56,7 @@ class SongHandler(AbletonOSCHandler):
             "clip_trigger_quantization",
             "current_song_time",
             "groove_amount",
+            "is_ableton_link_enabled",
             "loop",
             "loop_length",
             "loop_start",
@@ -62,6 +67,8 @@ class SongHandler(AbletonOSCHandler):
             "punch_in",
             "punch_out",
             "record_mode",
+            "root_note",
+            "scale_name",
             "session_record",
             "signature_denominator",
             "signature_numerator",
@@ -69,13 +76,14 @@ class SongHandler(AbletonOSCHandler):
         ]
 
         #--------------------------------------------------------------------------------
-        # Callbacks for Songi: properties (read-only)
+        # Callbacks for Song: properties (read-only)
         #--------------------------------------------------------------------------------
         properties_r = [
             "can_redo",
             "can_undo",
             "is_playing",
             "song_length",
+            "session_record_status"
         ]
 
         for prop in properties_r + properties_rw:
@@ -210,6 +218,7 @@ class SongHandler(AbletonOSCHandler):
             fd = open(os.path.join(tempfile.gettempdir(), "abletonosc-song-structure.json"), "w")
             json.dump(song, fd)
             fd.close()
+            self.logger.warning("Exported song structure to directory %s" % tempfile.gettempdir())
             return (1,)
         self.osc_server.add_handler("/live/song/export/structure", song_export_structure)
 
@@ -224,7 +233,7 @@ class SongHandler(AbletonOSCHandler):
             else:
                 scene_index_min, scene_index_max = params
             return tuple(self.song.scenes[index].name for index in range(scene_index_min, scene_index_max))
-        self.osc_server.add_handler("/live/song/get/scene_names", song_get_scene_names)
+        self.osc_server.add_handler("/live/song/get/scenes/name", song_get_scene_names)
 
         #--------------------------------------------------------------------------------
         # Callbacks for Song: Cue point properties
@@ -245,6 +254,14 @@ class SongHandler(AbletonOSCHandler):
                 cue_point = song.cue_points[cue_point_index]
                 cue_point.jump()
         self.osc_server.add_handler("/live/song/cue_point/jump", partial(song_jump_to_cue_point, self.song))
+
+        self.osc_server.add_handler("/live/song/cue_point/add_or_delete", partial(self._call_method, self.song, "set_or_delete_cue"))
+        def song_cue_point_set_name(song, params: Tuple[Any] = ()):
+            cue_point_index = params[0]
+            new_name = params[1]
+            cue_point = song.cue_points[cue_point_index]
+            cue_point.name = new_name
+        self.osc_server.add_handler("/live/song/cue_point/set/name", partial(song_cue_point_set_name, self.song))
 
         #--------------------------------------------------------------------------------
         # Listener for /live/song/get/beat

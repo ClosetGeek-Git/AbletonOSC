@@ -20,7 +20,11 @@ class TrackHandler(AbletonOSCHandler):
                 for track_index in track_indices:
                     track = self.song.tracks[track_index]
                     if include_track_id:
-                        rv = func(track, *args, tuple([track_index] + params[1:]))
+                        # Tuple-safe: works whether `params` is a list or a tuple.
+                        # (Was `tuple([track_index] + params[1:])`, which raised
+                        # TypeError if params was a tuple — the reason a central
+                        # tuple() normalisation in osc_server was abandoned.)
+                        rv = func(track, *args, (track_index, *params[1:]))
                     else:
                         rv = func(track, *args, tuple(params[1:]))
 

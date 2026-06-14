@@ -1,12 +1,19 @@
 import argparse
 import threading
-from pythonosc.udp_client import SimpleUDPClient
+from pythonosc.udp_client import SimpleUDPClient, OscBundle, OscMessageBuilder
+from pythonosc.osc_bundle_builder import OscBundleBuilder
 from pythonosc.dispatcher import Dispatcher
 from pythonosc.osc_server import ThreadingOSCUDPServer
 from typing import Callable, Iterable
 
 REMOTE_PORT = 11000
 LOCAL_PORT = 11001
+
+#--------------------------------------------------------------------------------
+# Reserved prefix for the optional request-correlation marker.
+# Must match CORRELATION_PREFIX in abletonosc/osc_server.py.
+#--------------------------------------------------------------------------------
+CORRELATION_PREFIX = "@id:"
 
 #--------------------------------------------------------------------------------
 # An Ableton Live tick is 100ms. This constant is typically used for timeouts,
@@ -33,8 +40,29 @@ class AbletonOSCClient:
         self.client = SimpleUDPClient(hostname, port)
         self.verbose = False
 
+        #--------------------------------------------------------------------------------
+        # Request-correlation state. Each correlated query() allocates a unique
+        # "@id:<n>" token and registers a one-shot waiter keyed by that token, so
+        # multiple queries can be in flight at once (even to the same address).
+        #--------------------------------------------------------------------------------
+        self._pending = {}
+        self._corr_counter = 0
+        self._corr_lock = threading.Lock()
+
     def handle_osc(self, address, *params):
         # print("Received OSC: %s %s" % (address, params))
+        #--------------------------------------------------------------------------------
+        # If this is a correlated reply, route it to the waiting query() by token
+        # (not by address), stripping the marker first. Messages without a marker
+        # (listeners, beat events, errors, legacy replies) fall through to the
+        # usual address-keyed dispatch below.
+        #--------------------------------------------------------------------------------
+        if params and isinstance(params[0], str) and params[0].startswith(CORRELATION_PREFIX):
+            with self._corr_lock:
+                waiter = self._pending.get(params[0])
+            if waiter is not None:
+                waiter(address, params[1:])
+                return
         if address in self.address_handlers:
             self.address_handlers[address](address, params)
         if self.verbose:
@@ -44,6 +72,21 @@ class AbletonOSCClient:
         self.server.shutdown()
         self.server_thread.join()
         self.server = None
+
+    def send_bundle(self,
+                    messages: list[tuple[str, tuple]]):
+
+        import time
+        now = int(time.time())
+        bundle_builder = OscBundleBuilder(now)
+        for address, params in messages:
+            builder = OscMessageBuilder(address=address)
+            for param in params:
+                builder.add_arg(param)
+            msg = builder.build()
+            bundle_builder.add_content(msg)
+        bundle = bundle_builder.build()
+        self.client.send(bundle)
 
     def send_message(self,
                      address: str,
@@ -83,8 +126,8 @@ class AbletonOSCClient:
         del self.address_handlers[address]
 
     def await_message(self,
-                    address: str,
-                    timeout: float = TICK_DURATION):
+                      address: str,
+                      timeout: float = TICK_DURATION):
         """
         Awaits a reply from the given `address`, and optionally asserts that the function `fn`
         returns True when called with the returned OSC parameters.
@@ -120,6 +163,16 @@ class AbletonOSCClient:
               address: str,
               params: tuple = (),
               timeout: float = TICK_DURATION):
+        #--------------------------------------------------------------------------------
+        # Correlated query: prepend a unique "@id:<n>" marker and wait for the reply
+        # carrying that same marker. This allows multiple queries to be in flight
+        # simultaneously, including to the same address, without colliding. The
+        # marker is stripped by handle_osc(), so the returned value is unchanged.
+        #--------------------------------------------------------------------------------
+        with self._corr_lock:
+            self._corr_counter += 1
+            token = "%s%d" % (CORRELATION_PREFIX, self._corr_counter)
+
         rv = None
         _event = threading.Event()
 
@@ -129,10 +182,14 @@ class AbletonOSCClient:
             rv = params
             _event.set()
 
-        self.set_handler(address, received_response)
-        self.send_message(address, params)
-        _event.wait(timeout)
-        self.remove_handler(address)
+        with self._corr_lock:
+            self._pending[token] = received_response
+        try:
+            self.send_message(address, (token, *tuple(params)))
+            _event.wait(timeout)
+        finally:
+            with self._corr_lock:
+                self._pending.pop(token, None)
         if not _event.is_set():
             raise RuntimeError("No response received to query: %s" % address)
         return rv
