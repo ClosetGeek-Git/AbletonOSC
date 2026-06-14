@@ -31,6 +31,38 @@ Activity logs will be output to a `logs` subdirectory. Logging granularity can b
 AbletonOSC listens for OSC messages on port **11000**, and sends replies on port **11001**. Replies will be sent to the
 same IP as the originating message. When querying properties, OSC wildcard patterns can be used; for example, `/live/clip/get/* 0 0` will query all the properties of track 0, clip 0.
 
+### Request correlation (optional)
+
+Because OSC is transport over UDP and replies are matched only by address, it can be hard to pair a reply with the
+request that caused it when several requests are in flight — particularly when querying the same address concurrently.
+AbletonOSC supports an **optional, opt-in correlation marker** for this.
+
+To use it, prepend a single string argument of the form `@id:<token>` as the **first** parameter of your request. The
+server strips this marker before dispatching to the handler and re-prepends the identical string to the reply, so you
+can match the two up:
+
+```
+REQUEST  /live/clip/get/is_playing   "@id:42"  0 0
+REPLY    /live/clip/get/is_playing   "@id:42"  0 0 True
+```
+
+A correlated **command** (`/live/.../set/...` or a method) — which normally sends no reply — instead sends a
+marker-only acknowledgement, so you can confirm it completed:
+
+```
+REQUEST  /live/song/set/tempo   "@id:7"   125.0
+REPLY    /live/song/set/tempo   "@id:7"
+```
+
+Notes:
+- The feature is entirely opt-in. Requests without an `@id:` marker behave exactly as before, and non-correlated
+  commands still send no reply.
+- The `@id:` leading-string namespace is **reserved**: don't send a literal string beginning with `@id:` as the first
+  argument of a request unless you intend it as a correlation marker.
+- Correlation makes a reply *attributable*, not *guaranteed*: a reply lost on the network still times out.
+- The bundled Python client (`client/client.py`) uses this automatically — `client.query(...)` is safe to call
+  concurrently, including for the same address.
+
 ## Application API
 
 <details>
