@@ -55,7 +55,7 @@ class Manager(ControlSurface):
                 message = record.getMessage()
                 message = message[message.index(":") + 2:]
                 try:
-                    self.osc_server.send("/live/error", (message,))
+                    self.osc_server.broadcast("/live/error", (message,))
                 except OSError:
                     # If the connection is dead, silently ignore errors as there's not much more we can do
                     pass
@@ -70,7 +70,12 @@ class Manager(ControlSurface):
     def init_api(self):
         def test_callback(params):
             self.show_message("Received OSC OK")
-            self.osc_server.send("/live/test", ("ok",))
+            #--------------------------------------------------------------------------------
+            # Return the value (rather than send() it directly) so it flows through _reply():
+            # routed to the requesting client, and -- when correlated -- carrying the marker,
+            # so client.query("/live/test") resolves to ("ok",) instead of the empty ack.
+            #--------------------------------------------------------------------------------
+            return ("ok",)
         def reload_callback(params):
             self.reload_imports()
         def get_log_level_callback(params):

@@ -267,33 +267,60 @@ class SongHandler(AbletonOSCHandler):
         # Listener for /live/song/get/beat
         #--------------------------------------------------------------------------------
         self.last_song_time = -1.0
-        
+        #--------------------------------------------------------------------------------
+        # Beat is a single hot global Live observable, so we register exactly ONE Live
+        # listener and fan out to a per-client subscriber map {client_addr: tag-or-None}.
+        # The Live listener is added on first subscribe and removed on last unsubscribe.
+        #--------------------------------------------------------------------------------
+        self._beat_subscribers = {}
+
         def stop_beat_listener(params: Tuple[Any] = ()):
-            try:
-                self.song.remove_current_song_time_listener(self.current_song_time_changed)
-                self.logger.info("Removing beat listener")
-            except:
-                pass
+            client_addr = self.osc_server.current_request_addr()
+            if client_addr in self._beat_subscribers:
+                del self._beat_subscribers[client_addr]
+            if not self._beat_subscribers:
+                try:
+                    self.song.remove_current_song_time_listener(self.current_song_time_changed)
+                    self.logger.info("Removing beat listener")
+                except:
+                    pass
 
         def start_beat_listener(params: Tuple[Any] = ()):
-            stop_beat_listener()
-            self.logger.info("Adding beat listener")
-            self.song.add_current_song_time_listener(self.current_song_time_changed)
+            client_addr = self.osc_server.current_request_addr()
+            if not self._beat_subscribers:
+                self.logger.info("Adding beat listener")
+                self.song.add_current_song_time_listener(self.current_song_time_changed)
+            self._beat_subscribers[client_addr] = self.osc_server.current_request_tag()
 
         self.osc_server.add_handler("/live/song/start_listen/beat", start_beat_listener)
         self.osc_server.add_handler("/live/song/stop_listen/beat", stop_beat_listener)
 
     def current_song_time_changed(self):
         #--------------------------------------------------------------------------------
-        # If song has rewound or skipped to next beat, sent a /live/beat message
+        # If song has rewound or skipped to next beat, send a /live/beat message to each
+        # subscribed client (prefixed with that client's @tag: marker, if any).
         #--------------------------------------------------------------------------------
         if (self.song.current_song_time < self.last_song_time) or \
                 (int(self.song.current_song_time) > int(self.last_song_time)):
-            self.osc_server.send("/live/song/get/beat", (int(self.song.current_song_time),))
+            beat = int(self.song.current_song_time)
+            for client_addr, tag in list(self._beat_subscribers.items()):
+                payload = (beat,) if tag is None else (tag, beat)
+                self.osc_server.send("/live/song/get/beat", payload, remote_addr=client_addr)
         self.last_song_time = self.song.current_song_time
+
+    def drop_client(self, client_addr):
+        super().drop_client(client_addr)
+        if client_addr in self._beat_subscribers:
+            del self._beat_subscribers[client_addr]
+            if not self._beat_subscribers:
+                try:
+                    self.song.remove_current_song_time_listener(self.current_song_time_changed)
+                except:
+                    pass
 
     def clear_api(self):
         super().clear_api()
+        self._beat_subscribers = {}
         try:
             self.song.remove_current_song_time_listener(self.current_song_time_changed)
         except:

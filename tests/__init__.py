@@ -10,8 +10,8 @@ sys.path.append(".")
 
 from ..client import AbletonOSCClient, TICK_DURATION
 
-# Live tick is 100ms. Wait for this long plus a short additional buffer.
-TICK_DURATION = 0.125
+# Live tick is 100ms. TICK_DURATION (imported from client.py) is the single source of
+# truth for that interval plus a short processing buffer; do not redefine it here.
 
 @pytest.fixture(scope="module")
 def client() -> AbletonOSCClient:

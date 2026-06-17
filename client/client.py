@@ -10,10 +10,19 @@ REMOTE_PORT = 11000
 LOCAL_PORT = 11001
 
 #--------------------------------------------------------------------------------
-# Reserved prefix for the optional request-correlation marker.
-# Must match CORRELATION_PREFIX in abletonosc/osc_server.py.
+# Reserved prefixes for the optional request markers.
+# Must match CORRELATION_PREFIX / LISTEN_TAG_PREFIX in abletonosc/osc_server.py.
+#   @id:  one-shot request/response correlation (query / query_all)
+#   @tag: persistent listener tag (start_listen / stop_listen)
 #--------------------------------------------------------------------------------
 CORRELATION_PREFIX = "@id:"
+TAG_PREFIX = "@tag:"
+
+#--------------------------------------------------------------------------------
+# Address on which the server reports errors. A correlated request that fails is
+# answered here carrying its @id: marker, so query() can raise instead of timing out.
+#--------------------------------------------------------------------------------
+ERROR_ADDRESS = "/live/error"
 
 #--------------------------------------------------------------------------------
 # An Ableton Live tick is 100ms. This constant is typically used for timeouts,
@@ -49,19 +58,35 @@ class AbletonOSCClient:
         self._corr_counter = 0
         self._corr_lock = threading.Lock()
 
+        #--------------------------------------------------------------------------------
+        # Persistent listener-tag state. start_listen() allocates a unique "@tag:<n>"
+        # token and registers a persistent callback keyed by that token, so a client can
+        # demultiplex multiple long-lived listeners (including to the same address).
+        #--------------------------------------------------------------------------------
+        self._tags = {}
+        self._tag_counter = 0
+
     def handle_osc(self, address, *params):
         # print("Received OSC: %s %s" % (address, params))
         #--------------------------------------------------------------------------------
-        # If this is a correlated reply, route it to the waiting query() by token
-        # (not by address), stripping the marker first. Messages without a marker
-        # (listeners, beat events, errors, legacy replies) fall through to the
-        # usual address-keyed dispatch below.
+        # Three-way demux by leading marker, stripping it first:
+        #   @id:   -> the one-shot query()/query_all() waiter for that token
+        #   @tag:  -> the persistent start_listen() callback for that token
+        #   none   -> the usual address-keyed dispatch (legacy listeners, beat, errors)
         #--------------------------------------------------------------------------------
-        if params and isinstance(params[0], str) and params[0].startswith(CORRELATION_PREFIX):
-            with self._corr_lock:
-                waiter = self._pending.get(params[0])
-            if waiter is not None:
-                waiter(address, params[1:])
+        if params and isinstance(params[0], str):
+            marker = params[0]
+            if marker.startswith(CORRELATION_PREFIX):
+                with self._corr_lock:
+                    waiter = self._pending.get(marker)
+                if waiter is not None:
+                    waiter(address, params[1:])
+                return
+            elif marker.startswith(TAG_PREFIX):
+                with self._corr_lock:
+                    entry = self._tags.get(marker)
+                if entry is not None and entry["callback"] is not None:
+                    entry["callback"](address, params[1:])
                 return
         if address in self.address_handlers:
             self.address_handlers[address](address, params)
@@ -174,12 +199,21 @@ class AbletonOSCClient:
             token = "%s%d" % (CORRELATION_PREFIX, self._corr_counter)
 
         rv = None
+        err = None
         _event = threading.Event()
 
-        def received_response(address, params):
+        def received_response(reply_address, params):
             nonlocal rv
+            nonlocal err
             nonlocal _event
-            rv = params
+            #--------------------------------------------------------------------------------
+            # A correlated error is delivered on ERROR_ADDRESS carrying our token, so the
+            # query fails fast (raised below) instead of timing out.
+            #--------------------------------------------------------------------------------
+            if reply_address == ERROR_ADDRESS:
+                err = params[0] if params else "error"
+            else:
+                rv = params
             _event.set()
 
         with self._corr_lock:
@@ -192,7 +226,92 @@ class AbletonOSCClient:
                 self._pending.pop(token, None)
         if not _event.is_set():
             raise RuntimeError("No response received to query: %s" % address)
+        if err is not None:
+            raise RuntimeError("Error querying %s: %s" % (address, err))
         return rv
+
+    def query_all(self,
+                  address: str,
+                  params: tuple = (),
+                  timeout: float = TICK_DURATION):
+        """
+        Correlated query that collects EVERY reply carrying our marker, for the full
+        timeout, rather than returning the first. Intended for wildcard queries (e.g.
+        "/live/clip/get/*"), where the server fans out one reply per matching handler.
+
+        Returns:
+            A list of (address, params) tuples, one per reply received within the timeout
+            (markers already stripped). May be empty if nothing matched.
+        """
+        import time
+
+        with self._corr_lock:
+            self._corr_counter += 1
+            token = "%s%d" % (CORRELATION_PREFIX, self._corr_counter)
+
+        results = []
+
+        def received_response(reply_address, params):
+            with self._corr_lock:
+                results.append((reply_address, params))
+
+        with self._corr_lock:
+            self._pending[token] = received_response
+        try:
+            self.send_message(address, (token, *tuple(params)))
+            #--------------------------------------------------------------------------------
+            # A wildcard reply count is unknown, so wait the full timeout and collect.
+            #--------------------------------------------------------------------------------
+            time.sleep(timeout)
+        finally:
+            with self._corr_lock:
+                self._pending.pop(token, None)
+                collected = list(results)
+        return collected
+
+    def start_listen(self,
+                     address: str,
+                     params: tuple = (),
+                     callback: Callable = None):
+        """
+        Start a tagged listener. Allocates a unique "@tag:<n>" marker, sends the
+        start_listen request with it, and registers `callback` to receive every update
+        carrying that marker. Multiple listeners (even to the same address) can be active
+        concurrently and are demultiplexed by tag.
+
+        Args:
+            address: A start_listen address, e.g. "/live/track/start_listen/volume"
+            params: The listener's context params, e.g. (track_index,)
+            callback: Called as callback(reply_address, params) for each update, with the
+                      tag already stripped.
+
+        Returns:
+            An opaque handle (the tag string) to pass to stop_listen().
+        """
+        with self._corr_lock:
+            self._tag_counter += 1
+            tag = "%s%d" % (TAG_PREFIX, self._tag_counter)
+        stop_address = address.replace("/start_listen/", "/stop_listen/")
+        with self._corr_lock:
+            self._tags[tag] = {
+                "callback": callback,
+                "stop_address": stop_address,
+                "params": tuple(params),
+            }
+        self.send_message(address, (tag, *tuple(params)))
+        return tag
+
+    def stop_listen(self, handle):
+        """
+        Stop a tagged listener previously started with start_listen().
+
+        Args:
+            handle: The tag returned by start_listen().
+        """
+        with self._corr_lock:
+            entry = self._tags.pop(handle, None)
+        if entry is not None:
+            self.send_message(entry["stop_address"], (handle, *entry["params"]))
 
 def main(args):
     client = AbletonOSCClient(args.hostname, args.port)

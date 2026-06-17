@@ -95,35 +95,41 @@ class DeviceHandler(AbletonOSCHandler):
             return param_index, device.parameters[param_index].str_for_value(device.parameters[param_index].value)
         
         def device_get_parameter_value_listener(device, params: Tuple[Any] = ()):
+            #--------------------------------------------------------------------------------
+            # Capture the requesting client and any tag now (see AbletonOSCHandler._start_listen).
+            #--------------------------------------------------------------------------------
+            remote_addr = self.osc_server.current_request_addr()
+            tag = self.osc_server.current_request_tag()
+            parameter = device.parameters[params[2]]
 
             def property_changed_callback():
-                value = device.parameters[params[2]].value
+                value = parameter.value
                 self.logger.info("Property %s changed of %s %s: %s" % ('value', 'device parameter', str(params), value))
-                self.osc_server.send("/live/device/get/parameter/value", (*params, value,))
-
-                value_string = device.parameters[params[2]].str_for_value(device.parameters[params[2]].value)
+                value_string = parameter.str_for_value(parameter.value)
                 self.logger.info("Property %s changed of %s %s: %s" % ('value_string', 'device parameter', str(params), value_string))
-                self.osc_server.send("/live/device/get/parameter/value_string", (*params, value_string,))
-
-            listener_key = ('device_parameter_value', tuple(params))
-            if listener_key in self.listener_functions:
-               device_get_parameter_remove_value_listener(device, params)
+                value_payload = (*params, value)
+                string_payload = (*params, value_string)
+                if tag is not None:
+                    value_payload = (tag, *value_payload)
+                    string_payload = (tag, *string_payload)
+                self.osc_server.send("/live/device/get/parameter/value", value_payload, remote_addr=remote_addr)
+                self.osc_server.send("/live/device/get/parameter/value_string", string_payload, remote_addr=remote_addr)
 
             self.logger.info("Adding listener for %s %s, property: %s" % ('device parameter', str(params), 'value'))
-            device.parameters[params[2]].add_value_listener(property_changed_callback)
-            self.listener_functions[listener_key] = property_changed_callback
+            parameter.add_value_listener(property_changed_callback)
+
+            def unsubscribe():
+                parameter.remove_value_listener(property_changed_callback)
+
+            self._add_listener(('device_parameter_value', tuple(params), remote_addr), property_changed_callback, unsubscribe)
 
             property_changed_callback()
 
         def device_get_parameter_remove_value_listener(device, params: Tuple[Any] = ()):
-            listener_key = ('device_parameter_value', tuple(params))
-            if listener_key in self.listener_functions:
-                self.logger.info("Removing listener for %s %s, property %s" % (self.class_identifier, str(params), 'value'))
-                listener_function = self.listener_functions[listener_key]
-                device.parameters[params[2]].remove_value_listener(listener_function)
-                del self.listener_functions[listener_key]
-            else:
-                self.logger.warning("No listener function found for property: %s (%s)" % (prop, str(params)))
+            key = ('device_parameter_value', tuple(params), self.osc_server.current_request_addr())
+            self.logger.info("Removing listener for %s %s, property %s" % (self.class_identifier, str(params), 'value'))
+            if not self._remove_listener(key):
+                self.logger.warning("No listener function found for device parameter value (%s)" % str(params))
 
         def device_set_parameter_value(device, params: Tuple[Any] = ()):
             param_index, param_value = params[:2]

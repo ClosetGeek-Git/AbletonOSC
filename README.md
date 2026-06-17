@@ -54,14 +54,52 @@ REQUEST  /live/song/set/tempo   "@id:7"   125.0
 REPLY    /live/song/set/tempo   "@id:7"
 ```
 
+If a correlated request **fails** — its handler raises, or the address is unknown — the server replies on
+`/live/error` carrying the same marker, so the request fails fast instead of timing out:
+
+```
+REQUEST  /live/api/show_message   "@id:8"
+REPLY    /live/error   "@id:8"   "Error handling /live/api/show_message: ..."
+```
+
 Notes:
 - The feature is entirely opt-in. Requests without an `@id:` marker behave exactly as before, and non-correlated
   commands still send no reply.
 - The `@id:` leading-string namespace is **reserved**: don't send a literal string beginning with `@id:` as the first
-  argument of a request unless you intend it as a correlation marker.
+  argument of a request unless you intend it as a correlation marker. (A correlated request that collides this way now
+  fails gracefully with an error reply rather than hanging.)
 - Correlation makes a reply *attributable*, not *guaranteed*: a reply lost on the network still times out.
 - The bundled Python client (`client/client.py`) uses this automatically — `client.query(...)` is safe to call
-  concurrently, including for the same address.
+  concurrently, including for the same address, and **raises** on a correlated error reply.
+- For a **wildcard** query, the server fans out one reply per matching property. Use `client.query_all(address, params)`
+  to collect *all* of them (it returns a list of `(address, params)` and waits the full timeout); plain `query()`
+  returns only the first.
+
+### Listener tagging (optional)
+
+Listener updates reuse the getter address (e.g. `/live/track/get/volume`), which makes it hard to tell apart several
+listeners on the *same* address (e.g. the volume of two different tracks). You can optionally **tag** a listener: prepend
+`@tag:<token>` as the **first** parameter of a `start_listen` request, and every update for that listener — the immediate
+value push and all later changes — carries the identical marker, so you can demultiplex them:
+
+```
+REQUEST  /live/track/start_listen/volume   "@tag:v0"   0
+UPDATE   /live/track/get/volume            "@tag:v0"   0  0.85
+UPDATE   /live/track/get/volume            "@tag:v0"   0  0.40
+```
+
+In the bundled client: `handle = client.start_listen(address, params, callback)` registers a tagged listener whose
+`callback(address, params)` fires for every update (tag already stripped), and `client.stop_listen(handle)` removes it.
+A tagged `start_listen` is confirmed by its immediate tagged push, so it gets no separate acknowledgement. An **untagged**
+`start_listen` behaves exactly as before (updates on the bare getter address, no marker).
+
+### Multiple clients
+
+Each listener's updates are routed to the client that registered it, and the beat / `/live/startup` / `/live/error`
+messages are sent to every client that has been seen — so multiple clients (on different hosts) can register listeners
+independently. A client that quits without unsubscribing has its listeners reaped when the server next detects its
+address as unreachable. (Replies are sent to the fixed reply port **11001**, so two clients on the *same* host are not
+distinguishable for async traffic.)
 
 ## Application API
 

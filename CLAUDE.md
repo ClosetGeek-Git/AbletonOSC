@@ -19,12 +19,16 @@ There is no build step and no linter/formatter configured.
     - macOS: `~/Music/Ableton/User Library/Remote Scripts`
 - **Reload code without restarting Live:** send OSC `/live/api/reload` (the console clients send
   this on startup). This re-imports the handler modules and re-registers all handlers.
-- **Tests** (`pip3 install pytest` first) **require a running Live instance** — there is no
-  headless/CI path. Live must have a blank default set, default audio in/out devices, and
+- **Tests** (`pip3 install pytest` first). Most of the suite **requires a running Live instance** —
+  Live must have a blank default set, default audio in/out devices, and
   `Preferences > Record, Warp & Launch > Count-In = None`. Run from the repo root:
     - All tests: `pytest`
     - Single file: `pytest tests/test_track.py`
     - Single test: `pytest tests/test_track.py::test_track_property_mute`
+  - **Exception — headless tier:** `pytest tests/test_headless.py` needs **no Live**. It exercises the
+    OSC server + client protocol logic (correlation, multi-client routing, listener tagging, error
+    replies, dead-client teardown) over UDP loopback, installing `Live`/`ableton.v2` `sys.modules`
+    stubs so the package imports. This is the CI-runnable safety net for that wire logic.
 - **Interactive console** (against a running Live): `python run-console.py` — a REPL that sends
   `/live/...` commands and prints replies.
 - **View Live's boot log** for compile/load errors: see `CONTRIBUTING.md` (greps the Live Usage
@@ -63,10 +67,13 @@ The base class (`abletonosc/handler.py`) provides the generic wrappers that most
   `/live/<object>/get/<prop>` with the same `(*params, *value)` shape as a query reply.
 
 **Transport.** Listens on UDP **11000**, replies on **11001**. Query/command replies are addressed
-to the host that sent the request. *Unsolicited* messages (listeners, beat, `/live/error`,
-`/live/startup`) go to the last client that sent anything (`OSCServer._remote_addr` is overwritten
-on every received packet) — i.e. multiple simultaneous clients are not properly supported for
-async traffic. This is a known limitation, deliberately out of scope.
+to the host that sent the request. *Unsolicited* messages are now routed per-client: each listener's
+updates go to the client that registered it (captured at registration via the per-request context;
+see "Multi-client async routing" below), and true broadcasts (`/live/startup`, `/live/error`, the
+init-time `average_process_usage`) go to every client in `OSCServer._known_clients`. `_remote_addr`
+remains only as the single-client fallback. **Caveat:** replies use the fixed response port 11001,
+so two clients on the *same host* are not distinguishable for async traffic (per-host, not
+per-(host,port)).
 
 **Tests.** `tests/` is a subpackage with relative imports; `tests/__init__.py` sends
 `/live/api/reload` before the suite runs and exposes the `client` fixture. The test harness is the
@@ -108,25 +115,63 @@ REQUEST  /live/song/set/tempo   "@id:7"   125.0
 REPLY    /live/song/set/tempo   "@id:7"
 ```
 
+A correlated request that **fails** (handler raises, or unknown address) gets a marker-carrying error
+reply on `/live/error`, so the client fails fast instead of timing out:
+
+```
+REQUEST  /live/api/show_message   "@id:8"
+REPLY    /live/error   "@id:8"   "Error handling /live/api/show_message: ..."
+```
+
 **Where it lives:**
-- Server: `abletonosc/osc_server.py`. `CORRELATION_PREFIX = "@id:"` (module-level so it survives
-  `importlib.reload`). `process_message()` strips a leading `@id:` marker into `corr`; the `_reply()`
-  helper re-prepends it. Both the exact-match and wildcard branches route through `_reply()`. The
-  marker-gated ACK is sent only when a correlated command returns `None`.
-- Client: `client/client.py`. Its `CORRELATION_PREFIX` **must match** the server's. `query()`
-  allocates a unique `@id:<n>` token, registers a one-shot waiter keyed by that token, and prepends
-  the marker; `handle_osc()` demuxes replies by token (not address). This makes `query()`
-  **concurrency-safe**, including for the same address. Messages with no marker (listeners, beat,
-  errors, legacy replies) fall through to the existing address-keyed dispatch.
+- Server: `abletonosc/osc_server.py`. `CORRELATION_PREFIX = "@id:"` and `LISTEN_TAG_PREFIX = "@tag:"`
+  (module-level so they survive `importlib.reload`). `process_message()` strips a single leading
+  marker — `@id:` into `corr`, or `@tag:` into the per-request tag — via one `if/elif` on `params[0]`
+  (guarded by `MAX_MARKER_LENGTH`); `_reply()` re-prepends it. Both exact-match and wildcard branches
+  route through `_reply()`. The marker-gated ACK fires only for `@id:` commands returning `None`.
+  `_reply_error()` sends the correlated error on `ERROR_ADDRESS`.
+- Client: `client/client.py`. Its prefixes **must match** the server's. `query()` allocates a unique
+  `@id:<n>` token, registers a one-shot waiter keyed by that token, and prepends the marker;
+  `query_all()` collects *all* replies for a token (wildcards). `handle_osc()` is a 3-way demux:
+  `@id:` → one-shot `_pending` waiter, `@tag:` → persistent `_tags` callback, else → address-keyed
+  dispatch (legacy listeners, beat, errors). `query()` **raises** on a reply addressed to
+  `/live/error`. This makes `query()` concurrency-safe, including for the same address.
+
+**Listener tagging (`@tag:`).** A `start_listen` request may carry `@tag:<token>`; every update for
+that listener (the immediate push and all later changes) is prefixed with the tag, so a client can
+demultiplex several listeners on the same getter address. A tagged `start_listen` is confirmed by its
+immediate tagged push (no separate ack — the ACK is gated on `@id:`). Client API:
+`start_listen(address, params, callback)` → handle, `stop_listen(handle)`. Untagged `start_listen` is
+byte-identical to before.
+
+**Multi-client async routing.** `OSCServer` publishes a *per-request context* — `_req_remote_addr` and
+`_req_tag`, set at the top of `process_message` and cleared in a `finally` — readable via
+`current_request_addr()` / `current_request_tag()`. This is safe **only** because of the
+single-threaded tick (one message dispatched fully before the next). Listener registration
+(`handler.py _start_listen`, `track.py _start_mixer_listen`, `device.py` device-parameter listener,
+`song.py` beat) **captures these by value** into the listener's closure, so later async pushes (on
+future ticks, when the context is gone) route to the right client. The listener registry is keyed
+`(prop, tuple(params), client_addr)` with a uniform `(callback, unsubscribe)` value, so two clients
+listening to the same property don't collide. Each handler registers as a component
+(`OSCServer.register_component`); a client detected unreachable on send (`_dead_pending` →
+`_drop_client` → `component.drop_client(addr)`) has all its listeners reaped. Broadcasts use
+`OSCServer.broadcast()` over the bounded `_known_clients` set.
 
 **Invariants to preserve:**
-- The feature is **opt-in and invisible**: a request without an `@id:` marker behaves exactly as
-  before, and a non-correlated command still sends no reply. Don't break this — the existing test
-  suite pins exact non-correlated reply shapes.
-- The `@id:` leading-string namespace is **reserved**; the marker is detected purely by the
-  `@id:` prefix on the first arg.
-- Handlers never see the marker — encode/decode is centralized in `OSCServer` and the client, so
-  no per-handler changes are needed to support correlation.
+- The feature is **opt-in and invisible**: a request without a marker behaves exactly as before, an
+  untagged `start_listen` pushes the same untagged shape, and a non-correlated command sends no reply.
+  Don't break this — the suite pins exact non-correlated/untagged reply shapes.
+- The `@id:`/`@tag:` leading-string namespaces are **reserved**; markers are detected purely by prefix
+  on the first arg (length-capped).
+- Handlers never see the marker — encode/decode is centralized in `OSCServer` and the client.
+- Listener closures must capture `remote_addr`/`tag` **at registration** (a local, not a late
+  `self.osc_server._req_*` read), or async pushes mis-route. Beat is the one fan-out exception (one
+  global Live listener → a `_beat_subscribers` map).
 
-Tests for this live in `tests/test_correlation.py` (marker invisibility, concurrency, `None`
-preservation, command ACK, opt-in, wildcard, backward-compat).
+**Reload caveat.** `OSCServer` is created once in `Manager.__init__` and is **not** rebuilt by
+`/live/api/reload` (which re-imports modules + rebuilds handlers). So changes to `osc_server.py`
+require a **full Live restart**; handler-only changes hot-reload.
+
+Tests: `tests/test_headless.py` runs the full correlation/routing/tagging/error/teardown protocol with
+**no Ableton** (sys.modules stubs + UDP loopback) — the CI-runnable tier. `tests/test_correlation.py`
+and `tests/test_tagging.py` confirm the same against a real Live instance.

@@ -247,32 +247,36 @@ class TrackHandler(AbletonOSCHandler):
 
     def _start_mixer_listen(self, target, prop, params: Optional[Tuple] = ()) -> None:
         parameter_object = getattr(target.mixer_device, prop)
+        #--------------------------------------------------------------------------------
+        # Capture the requesting client and any tag now (see AbletonOSCHandler._start_listen).
+        #--------------------------------------------------------------------------------
+        remote_addr = self.osc_server.current_request_addr()
+        tag = self.osc_server.current_request_tag()
+        osc_address = "/live/%s/get/%s" % (self.class_identifier, prop)
+
         def property_changed_callback():
             value = parameter_object.value
             self.logger.info("Property %s changed of %s %s: %s" % (prop, self.class_identifier, str(params), value))
-            osc_address = "/live/%s/get/%s" % (self.class_identifier, prop)
-            self.osc_server.send(osc_address, (*params, value,))
-
-        listener_key = (prop, tuple(params))
-        if listener_key in self.listener_functions:
-            self._stop_mixer_listen(target, prop, params)
+            payload = (*params, value)
+            if tag is not None:
+                payload = (tag, *payload)
+            self.osc_server.send(osc_address, payload, remote_addr=remote_addr)
 
         self.logger.info("Adding listener for %s %s, property: %s" % (self.class_identifier, str(params), prop))
 
         parameter_object.add_value_listener(property_changed_callback)
-        self.listener_functions[listener_key] = property_changed_callback
+
+        def unsubscribe():
+            parameter_object.remove_value_listener(property_changed_callback)
+
+        self._add_listener((prop, tuple(params), remote_addr), property_changed_callback, unsubscribe)
         #--------------------------------------------------------------------------------
         # Immediately send the current value
         #--------------------------------------------------------------------------------
         property_changed_callback()
 
     def _stop_mixer_listen(self, target, prop, params: Optional[Tuple[Any]] = ()) -> None:
-        parameter_object = getattr(target.mixer_device, prop)
-        listener_key = (prop, tuple(params))
-        if listener_key in self.listener_functions:
-            self.logger.info("Removing listener for %s %s, property %s" % (self.class_identifier, str(params), prop))
-            listener_function = self.listener_functions[listener_key]
-            parameter_object.remove_value_listener(listener_function)
-            del self.listener_functions[listener_key]
-        else:
+        key = (prop, tuple(params), self.osc_server.current_request_addr())
+        self.logger.info("Removing listener for %s %s, property %s" % (self.class_identifier, str(params), prop))
+        if not self._remove_listener(key):
             self.logger.warning("No listener function found for property: %s (%s)" % (prop, str(params)))

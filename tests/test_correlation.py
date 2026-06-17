@@ -1,5 +1,6 @@
 from . import client, wait_one_tick, TICK_DURATION
 import threading
+import pytest
 
 #--------------------------------------------------------------------------------
 # Request correlation (the opt-in "@id:<token>" leading-string marker).
@@ -117,3 +118,39 @@ def test_correlation_backward_compatible_client(client):
     rv = client.await_message("/live/song/get/tempo", TICK_DURATION * 4)
     assert isinstance(rv, tuple)
     assert len(rv) == 1
+
+def test_correlation_handler_error_raises_fast(client):
+    #--------------------------------------------------------------------------------
+    # A correlated request whose handler raises now returns a marker-carrying error
+    # reply, so query() raises immediately instead of timing out. /live/api/show_message
+    # with no text triggers an IndexError in the handler -- this also covers the
+    # @id:-namespace collision case, which now fails gracefully rather than hanging.
+    #--------------------------------------------------------------------------------
+    with pytest.raises(RuntimeError):
+        client.query("/live/api/show_message", (), timeout=TICK_DURATION * 4)
+
+def test_correlation_unknown_address_raises_fast(client):
+    #--------------------------------------------------------------------------------
+    # A correlated request to an unknown address gets a correlated error reply, so the
+    # client fails fast with an informative message rather than a bare timeout.
+    #--------------------------------------------------------------------------------
+    with pytest.raises(RuntimeError) as exc:
+        client.query("/live/does/not/exist", (), timeout=TICK_DURATION * 4)
+    assert "Unknown" in str(exc.value)
+
+def test_correlation_query_all_wildcard(client):
+    #--------------------------------------------------------------------------------
+    # query_all() collects EVERY reply for a wildcard, not just the first. The server
+    # fans out one reply per matching property; each is its own (address, params).
+    #--------------------------------------------------------------------------------
+    track_id, clip_id = 0, 0
+    client.send_message("/live/clip_slot/create_clip", (track_id, clip_id, 4))
+    wait_one_tick()
+
+    replies = client.query_all("/live/clip/get/*", (track_id, clip_id), timeout=TICK_DURATION * 4)
+    client.send_message("/live/clip_slot/delete_clip", (track_id, clip_id))
+
+    assert len(replies) > 1
+    for address, params in replies:
+        assert params[0:2] == (track_id, clip_id)
+        assert not any(isinstance(x, str) and x.startswith("@id:") for x in params)
