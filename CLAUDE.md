@@ -65,6 +65,11 @@ The base class (`abletonosc/handler.py`) provides the generic wrappers that most
   below).
 - **Listeners reuse the getter address.** `start_listen/<prop>` pushes unsolicited updates to
   `/live/<object>/get/<prop>` with the same `(*params, *value)` shape as a query reply.
+- **Handlers return their reply value; they don't `send()` it.** A handler returns a tuple (or
+  `None`) and the server routes it through `_reply()`, so it reaches the requesting client and, when
+  correlated, carries the marker. Call `osc_server.send()` / `broadcast()` directly **only** for
+  genuinely *unsolicited* traffic (listener updates, beat, startup/error). A command handler that
+  `send()`s a "reply" itself is invisible to a correlated `query()` (which would resolve on the ack).
 
 **Transport.** Listens on UDP **11000**, replies on **11001**. Query/command replies are addressed
 to the host that sent the request. *Unsolicited* messages are now routed per-client: each listener's
@@ -83,20 +88,19 @@ real client library `client/client.py` (`AbletonOSCClient`), using `query()` /
 ### Gotcha: handlers receive `params` as a `list`
 
 `process_message` passes the incoming params to handlers as a **list**, and several handlers depend
-on that. In particular `create_track_callback` (`track.py`) builds the forwarded params by list
-concatenation — historically `[track_index] + params[1:]`. **Do not normalise `params` to a tuple
-centrally in `osc_server.py`** without auditing every per-object factory: a previous attempt to do
-so raised `TypeError` and was reverted. (The track factory has since been made tuple-safe with
-`(track_index, *params[1:])`, but the per-object factories still have mildly inconsistent param
-handling — a deliberate non-goal to unify them right now.)
+on that. **Do not normalise `params` to a tuple centrally in `osc_server.py`** without auditing every
+per-object factory: some build the forwarded params by list concatenation/slicing (e.g. `device.py`
+and `scene.py` pass `params[0:]`), so a central tuple cast would raise `TypeError` there. The track
+factory is tuple-safe (`(track_index, *params[1:])`); the others are not, by deliberate non-goal.
+(The listener registry keys on `tuple(params)`, so registration itself is tuple/list-agnostic.)
 
 ## Request correlation
 
 Replies are matched only by OSC address, which makes it hard to pair a reply with its request when
 several are in flight — especially concurrent queries to the *same* address. AbletonOSC supports an
-**opt-in correlation marker** to solve this. (This replaced an earlier, broken "custom fields" hack
-that overloaded OSC `Nil`/`None` as a delimiter — unusable because `None` is real data in this API,
-e.g. empty clip slots and inaccessible properties.)
+**opt-in correlation marker** to solve this. The marker is a leading **string** argument: `None`/Nil
+is real data in this API (empty clip slots, inaccessible properties), so protocol metadata must never
+be carried by a `None` sentinel.
 
 **Protocol.** A client may prepend a single reserved string argument `@id:<token>` as the **first**
 param of any request. The server strips it before the handler runs and re-prepends the identical
