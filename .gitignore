@@ -2,3 +2,11 @@
 *.swp
 __pycache__
 .DS_Store
+.venv311
+import_error.log
+logs/
+# Note: _vendor/ (vendored pyzmq + bundled libzmq) IS committed, like pyzmtp/.
+ctypes_probe.log
+.pytest_cache
+tests/fixtures/**/Backup/
+tests/fixtures/**/Icon?

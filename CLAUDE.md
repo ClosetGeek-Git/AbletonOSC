@@ -4,178 +4,187 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-AbletonOSC is an Ableton Live **MIDI Remote Script** that exposes the Live Object Model (LOM)
-over OSC. It runs **inside Live's embedded Python interpreter** — it is not a standalone program.
-Most modules import `Live` and `ableton.v2.*`, which only exist inside Live, so the package
-cannot be imported or run outside of Live. Requires Live 11+.
+AbletonOSC is an Ableton Live **MIDI Remote Script** that exposes the Live Object Model
+(LOM) to external processes over a path-based **JSON-RPC** wire, carried on the **ZeroMQ
+wire protocol (ZMTP)** over `tcp://` / `ipc://`. It runs **inside Live's embedded Python
+interpreter** — it is not a standalone program. The dispatcher imports `Live` and
+`ableton.v2.*`, which only exist inside Live, so the package cannot run outside Live
+(the headless tests install `sys.modules` stubs). Requires Live 11+ (the descriptor is a
+Live-12 sweep).
+
+> **JSON-RPC only — the OSC layer has been retired.** Despite the name, this fork no longer
+> speaks OSC. The per-object OSC handlers, the OSC dgram path, the `@id:`/`@tag:` string
+> markers, and the vendored `pythonosc` are all **gone**. JSON-RPC's native `id` / `sub` /
+> `error` carry correlation, subscriptions, and failures. The names `OSCServer` /
+> `osc_server.py` / `OSC_*` constants are retained only as the stable transport symbols.
+
+**Hard platform constraint (it shapes the whole transport design).** Live 12.4's embedded
+CPython is a **static build with no `ctypes`/`_ctypes` and no dynamic native loading** — it
+cannot import any compiled C-extension. That rules out `pyzmq`/`libzmq` (and any FFI)
+*inside Live*. So the in-Live transport is **`pyzmtp`**, a vendored **pure-Python,
+stdlib-only** ZMTP implementation; the out-of-Live client uses **real `pyzmq`**, which is
+wire-compatible with it.
+
+## The single source of truth
+
+[`abletonosc/lom_schema.py`](abletonosc/lom_schema.py) is a **pure-data descriptor** of the
+entire exposed LOM surface (9 objects, 144 properties, 46 methods). It is the one place LOM
+knowledge lives, and it drives three consumers:
+
+- the **dispatcher** (`jsonrpc.py`) interprets it to serve `get`/`set`/`call`/`subscribe`;
+- the **test battery** (`tests/test_jsonrpc.py`) iterates it for provably-complete coverage;
+- **`tools/export_schema.py`** emits `lom_schema.json` (PHP client codegen) and
+  `docs/JSONRPC_API.md` (human reference).
+
+Each property has a `kind` (`DIRECT` / `MIXER` / `SEND` / `PARAM` / `COMPUTED` / `LIST`) so
+the dispatcher needs **no per-object special-casing** for the common path. **Adding a Live
+property/method = one descriptor entry** — then `python tools/export_schema.py` to
+regenerate the schema + docs, and the parametrized battery automatically covers it.
+
+> **House rule: LOM facts are descriptor + code + web-verified, never trained-knowledge.**
+> The Cycling '74 apiref is the **Max** LOM and differs from the **Python control-surface**
+> LOM — verify against the Python LiveAPI docs (structure-void / nsuspray) and the deployed
+> behaviour, not from memory.
 
 ## Commands
 
-There is no build step and no linter/formatter configured.
+There is no build step and no linter. A Python 3.11 venv with `pyzmq` + `pytest` is checked
+in at `.venv311/` (the in-Live server never uses it).
 
-- **Install for manual testing:** copy (or symlink) the repo folder, named exactly `AbletonOSC`,
-  into Live's Remote Scripts dir, then enable it under `Preferences > Link / Tempo / MIDI`:
-    - Windows: `\Users\<user>\Documents\Ableton\User Library\Remote Scripts`
+- **Install for manual testing:** copy the repo folder, named exactly `AbletonOSC`, into
+  Live's Remote Scripts dir, then enable it under `Preferences > Link / Tempo / MIDI`:
     - macOS: `~/Music/Ableton/User Library/Remote Scripts`
-- **Reload code without restarting Live:** send OSC `/live/api/reload` (the console clients send
-  this on startup). This re-imports the handler modules and re-registers all handlers.
-- **Tests** (`pip3 install pytest` first). Most of the suite **requires a running Live instance** —
-  Live must have a blank default set, default audio in/out devices, and
-  `Preferences > Record, Warp & Launch > Count-In = None`. Run from the repo root:
-    - All tests: `pytest`
-    - Single file: `pytest tests/test_track.py`
-    - Single test: `pytest tests/test_track.py::test_track_property_mute`
-  - **Exception — headless tier:** `pytest tests/test_headless.py` needs **no Live**. It exercises the
-    OSC server + client protocol logic (correlation, multi-client routing, listener tagging, error
-    replies, dead-client teardown) over UDP loopback, installing `Live`/`ableton.v2` `sys.modules`
-    stubs so the package imports. This is the CI-runnable safety net for that wire logic.
-- **Interactive console** (against a running Live): `python run-console.py` — a REPL that sends
-  `/live/...` commands and prints replies.
-- **View Live's boot log** for compile/load errors: see `CONTRIBUTING.md` (greps the Live Usage
-  log for `AbletonOSC`).
+    - Windows: `\Users\<user>\Documents\Ableton\User Library\Remote Scripts`
+  - Live does **not** follow symlinks on macOS — use a real copy (the live tier `rsync`s).
+- **Reload code without restarting Live:** call `application.reload` (JSON-RPC). It
+  re-imports the dispatcher + descriptor and rebuilds the handler. **Caveat:** it does
+  **not** rebuild `OSCServer`, so the running pyzmtp ROUTER + its transport thread survive —
+  changes to `osc_server.py` / `zmtp_transport.py` need a **full Live restart**.
+- **Regenerate the exported schema + docs after editing the descriptor:**
+  `.venv311/bin/python tools/export_schema.py`
+- **Tests** (use the checked-in venv). See "Testing" below. Headless tiers:
+  `.venv311/bin/python -m pytest tests/ -q`
+- **View Live's boot log** for compile/load errors: see `CONTRIBUTING.md`. A genuine
+  import failure inside Live is also dumped to `import_error.log` next to `__init__.py`.
 
 ## Architecture
 
-**Entry point & lifecycle.** Live calls `create_instance()` in `__init__.py`, which returns a
-`Manager` (`manager.py`, a `ControlSurface` subclass). `Manager.__init__` creates the OSC server
-and schedules `tick()`. **Everything runs single-threaded on a ~100ms tick** — Live beachballs if
-you start a thread, so `Manager.tick()` calls `osc_server.process()` (a non-blocking socket drain)
-and reschedules itself every tick. Do not introduce threads or blocking calls in handler code.
+**Entry point & lifecycle.** Live calls `create_instance()` in `__init__.py`, which returns
+a `Manager` (`manager.py`, a `ControlSurface` subclass). `Manager.__init__` creates the
+server and schedules `tick()`. **Handler code runs single-threaded on a ~100ms tick** —
+Live beachballs if you do CPU work on a background thread or touch the LOM off the tick, so
+`Manager.tick()` calls `osc_server.process()` (a non-blocking **drain of the transport
+bridge queues**, no socket I/O) and reschedules itself. Do not introduce threads or blocking
+calls in handler code. (There is exactly **one** background thread — the pyzmtp transport's
+private asyncio loop — and it is safe *because* it only parks in socket I/O, never touches
+the LOM.)
 
-**Custom OSC server.** `abletonosc/osc_server.py` (`OSCServer`) is a hand-rolled OSC server. The
-vendored `pythonosc/` package is used **only** for message build/parse (and by the test client) —
-it is checked in, not a pip dependency, so treat edits there as vendoring changes. `process()`
-drains the UDP socket; `process_message()` dispatches to a registered handler by exact address, or,
-if the address contains `*`, fans out to every handler matching the wildcard regex.
+**The server (`abletonosc/osc_server.py`, `OSCServer`).** Owns the transport and routes
+every inbound frame to the JSON-RPC dispatcher. `process()` drains three queues populated on
+the asyncio thread: inbound frames → `dispatch_frame()` → `json_dispatcher.handle(data,
+routing_id)`; peer connect/disconnect events (disconnect → `_drop_client`, reaping that
+client's subscriptions); and `HostUnreachable` send-failures (→ `_drop_client`). Replies and
+subscription pushes go out via `send_json(routing_id, obj)`; lifecycle events via
+`broadcast_json(obj)` over the bounded `_known_clients` set.
 
-**Handlers.** Each subsystem is an `AbletonOSCHandler` subclass (`abletonosc/{song,track,clip,
-clip_slot,device,scene,view,application,midimap}.py`), instantiated once in `Manager.init_api()`.
-Each subclass's `init_api()` registers callbacks via `self.osc_server.add_handler(address, fn)`.
-The base class (`abletonosc/handler.py`) provides the generic wrappers that most endpoints reuse:
-`_call_method`, `_set_property`, `_get_property`, `_start_listen`, `_stop_listen`.
+**The dispatcher (`abletonosc/jsonrpc.py`, `JsonRpcHandler`).** An `AbletonOSCHandler`
+subclass (so it gets `self.song`, the per-client listener registry, and `drop_client`). It
+registers no addresses; `init_api()` hooks `self.osc_server.json_dispatcher = self`.
+`handle(data, routing_id)` parses the JSON envelope and runs one op or a `batch`:
+- **path resolution** (`_split` → root/indices/leaf; `_resolve_object` walks the fixed
+  song→track→clip_slot→clip / device / scene / view chain; `_accessor` returns a getter/
+  setter/listen-target per `kind`). Indexed leaves: `send.<i>`, `parameter.<i>.<sub>`.
+- **computed/list** getters are keyed by the descriptor's `compute` string (`len:<attr>`
+  resolves against the **owning** object — `len:tracks` on song, `len:devices` on a track,
+  `len:parameters` on a device; `version`, `avg_process_usage`, `selected_*`, `clips.*`,
+  `parameters.*`, `track_names`, `cue_points`).
+- **methods** are generic `getattr(obj, method)(*args)` plus a few bespoke cases
+  (clip notes, `application.*` → the Manager, `midimap.map_cc`, `scene.fire_selected`,
+  `clip_slot.duplicate_clip_to`, `track.delete_clip`, `device.set_parameters`).
+- **MIDI notes** use the **extended dict** API exclusively — `get_notes_extended` /
+  `add_new_notes(MidiNoteSpecification)` / `remove_notes_extended` / `remove_notes_by_id` —
+  exposing `note_id`, `probability`, `velocity_deviation`, `release_velocity` (Live 11/12).
+- **subscribe** registers a listener only for `observable` props (and the synthetic
+  `song.beat`), captures the `routing_id` **by value** in the push closure (so later async
+  pushes on future ticks route to the right client), and pushes the current value
+  immediately. `_jsonable` guards non-serialisable LOM values into a clean `415` error.
 
-**Address & reply conventions** (these are a public contract — tests assert exact reply tuples):
-- Addresses are `/live/<object>/<action>/<property>`, e.g. `/live/track/set/volume`.
-- **Getters echo their context params back, then the value.** A `_get_property` returns
-  `(value, *params)`, and the per-object wrapper factories (`create_track_callback` in `track.py`,
-  `create_clip_callback` in `clip.py`, and the equivalents in `clip_slot.py`/`device.py`/
-  `scene.py`) resolve the object index, call the handler, and **prepend that index to the reply**.
-  So a reply to `/live/clip/get/is_playing 0 0` is `(0, 0, True)`.
-- **Setters and methods return `None` → no reply is sent** (unless the request is correlated; see
-  below).
-- **Listeners reuse the getter address.** `start_listen/<prop>` pushes unsolicited updates to
-  `/live/<object>/get/<prop>` with the same `(*params, *value)` shape as a query reply.
-- **Handlers return their reply value; they don't `send()` it.** A handler returns a tuple (or
-  `None`) and the server routes it through `_reply()`, so it reaches the requesting client and, when
-  correlated, carries the marker. Call `osc_server.send()` / `broadcast()` directly **only** for
-  genuinely *unsolicited* traffic (listener updates, beat, startup/error). A command handler that
-  `send()`s a "reply" itself is invisible to a correlated `query()` (which would resolve on the ack).
+**The handler base (`abletonosc/handler.py`, `AbletonOSCHandler`).** A `Component` subclass
+providing the per-client listener registry — `_add_listener` / `_remove_listener` /
+`_clear_listeners` / `drop_client` — keyed so the registering client's routing-id is the
+last key element. The dispatcher builds its own subscription closures and uses these
+primitives; the base no longer carries OSC getter/setter/listen helpers.
 
-**Transport.** Listens on UDP **11000**, replies on **11001**. Query/command replies are addressed
-to the host that sent the request. *Unsolicited* messages are now routed per-client: each listener's
-updates go to the client that registered it (captured at registration via the per-request context;
-see "Multi-client async routing" below), and true broadcasts (`/live/startup`, `/live/error`, the
-init-time `average_process_usage`) go to every client in `OSCServer._known_clients`. `_remote_addr`
-remains only as the single-client fallback. **Caveat:** replies use the fixed response port 11001,
-so two clients on the *same host* are not distinguishable for async traffic (per-host, not
-per-(host,port)).
+**Network transport.** AbletonOSC speaks ZMTP over TCP, ROUTER↔DEALER:
+- **In Live (server):** a **pyzmtp ROUTER** bound on `tcp://0.0.0.0:11000` (`OSC_ENDPOINT`
+  in `constants.py`). pyzmtp is the vendored pure-Python ZMTP (top-level `pyzmtp/`).
+- **Out of Live (client):** a real **pyzmq DEALER** ([`client/jsonrpc_client.py`](client/jsonrpc_client.py),
+  `JsonRpcClient`) or php-zmq (`Closetgeek\Stemdj\Lom`). Each connects with its own ZeroMQ
+  **routing identity**; query/command replies *and* unsolicited subscription pushes travel
+  back over the **same** connection addressed to the requesting client's routing-id. There
+  is no separate response port; multiple clients (even on one host) are distinguishable.
+- **The asyncio-thread bridge (`abletonosc/zmtp_transport.py`, `ZmtpTransport`).** pyzmtp is
+  asyncio-native and the tick must never block, so the ROUTER runs on a **private asyncio
+  loop on a daemon thread** (`abletonosc-zmtp`), bridged to the tick by thread-safe
+  `queue.Queue`s. **Load-bearing rule:** only the loop thread ever touches a pyzmtp object;
+  the tick thread touches only the queues + `run_coroutine_threadsafe` /
+  `call_soon_threadsafe`. The bind is the one synchronous step (at `OSCServer.__init__`, off
+  the tick), raising `TransportBindError` on failure. `shutdown()` is deterministic
+  (cancel drainers → `router.close()` → `ctx.term()` → stop loop → join thread) — the
+  `LINGER=0` analog, so there is no port/thread leak on a Live restart.
+- **Disconnect detection.** A clean DEALER close arrives as a pyzmtp `disconnect` event; a
+  send that fails `HostUnreachable` is likewise reaped. No heartbeat/TTL. Half-open TCP (a
+  vanished peer that never sends FIN) is best-effort.
 
-**Tests.** `tests/` is a subpackage with relative imports; `tests/__init__.py` sends
-`/live/api/reload` before the suite runs and exposes the `client` fixture. The test harness is the
-real client library `client/client.py` (`AbletonOSCClient`), using `query()` /
-`await_message()` / `send_bundle()`.
+## Wire summary
 
-### Gotcha: handlers receive `params` as a `list`
+Envelope (one JSON object per frame): `{"id":N,"op":"get|set|call","path":"track.0.volume",
+"value":…,"args":[…]}`; `path` may be a list for multi-get; `{"id":N,"batch":[…]}` runs many
+ops in one round-trip. Replies: `{"id":N,"result":…}` or `{"id":N,"error":{"code":C,
+"message":M}}`. Subscriptions: `{"op":"subscribe","sub":N,"path":…}` → unsolicited
+`{"sub":N,"path":…,"value":…}`, reaped on disconnect. `{"op":"ping"}` → `"ok"` (readiness).
+Error codes: `400` malformed/not-readable/not-writable/bad-index · `404` unknown
+object/property/method/index · `408` client timeout · `415` non-serialisable · `500`
+internal. Full surface: [`docs/JSONRPC_API.md`](docs/JSONRPC_API.md) / `lom_schema.json`.
 
-`process_message` passes the incoming params to handlers as a **list**, and several handlers depend
-on that. **Do not normalise `params` to a tuple centrally in `osc_server.py`** without auditing every
-per-object factory: some build the forwarded params by list concatenation/slicing (e.g. `device.py`
-and `scene.py` pass `params[0:]`), so a central tuple cast would raise `TypeError` there. The track
-factory is tuple-safe (`(track_index, *params[1:])`); the others are not, by deliberate non-goal.
-(The listener registry keys on `tuple(params)`, so registration itself is tuple/list-agnostic.)
+## Testing
 
-## Request correlation
+The suite is **descriptor-driven** so coverage is provably complete and self-maintaining.
 
-Replies are matched only by OSC address, which makes it hard to pair a reply with its request when
-several are in flight — especially concurrent queries to the *same* address. AbletonOSC supports an
-**opt-in correlation marker** to solve this. The marker is a leading **string** argument: `None`/Nil
-is real data in this API (empty clip slots, inaccessible properties), so protocol metadata must never
-be carried by a `None` sentinel.
+- **T0 — headless, no Live, no socket** (CI):
+  - `tests/test_descriptor.py` — descriptor self-consistency (every `kind`/`compute`
+    resolves; `observable`/`writable` only on supported kinds; clip notes + beat declared).
+  - `tests/test_jsonrpc.py` — the real dispatcher driven against a generic **fake LOM tree**,
+    **parametrized over the descriptor** (every property get/set/subscribe, every method
+    call) + explicit notes/batch/error/computed/list/drop_client cases + a **meta-test that
+    enforces every descriptor entry produced a case** (no silent gaps).
+- **T1 — headless socket loopback, no Live** (CI):
+  - `tests/test_jsonrpc_loopback.py` — a real pyzmq DEALER ↔ pyzmtp ROUTER ↔ real
+    `OSCServer` ↔ dispatcher over tcp loopback (`process()` pumped on a thread); proves the
+    whole wire: encode → transport → `dispatch_frame` → dispatcher → `send_json` → demux,
+    plus per-client subscription routing and disconnect reaping.
+  - `tests/test_transport_teardown.py` — deterministic shutdown / port re-bind / client close.
+  - `tests/test_pyzmtp_vendoring.py` — pyzmtp is vendored, contains **no** native `.so`/
+    `.dylib`, and `ZmtpTransport` binds + shuts down.
+- **T2 — live, on-demand, human-attended** (not in CI): the descriptor-driven battery
+  against real Live 12 + a hand-authored canonical project. The fixture is specified in
+  [`tests/fixtures/manifest.py`](tests/fixtures/manifest.py) + `MANIFEST.md` (build it once,
+  Collect-All-and-Save, commit). A *trial* Live shows modal launch dialogs a **human must
+  dismiss**, so this tier needs someone present at launch.
 
-**Protocol.** A client may prepend a single reserved string argument `@id:<token>` as the **first**
-param of any request. The server strips it before the handler runs and re-prepends the identical
-string to the reply, so the client can match them:
+Run headless: `.venv311/bin/python -m pytest tests/ -q`. The Live stubs are installed by
+`tests/conftest.py` before collection, plus each headless module's own `install_live_stubs()`.
 
-```
-REQUEST  /live/clip/get/is_playing   "@id:42"  0 0
-REPLY    /live/clip/get/is_playing   "@id:42"  0 0 True
-```
+## Invariants to preserve
 
-A correlated **command** (`set`/method, which normally sends nothing) instead returns a marker-only
-**acknowledgement**, so completion can be confirmed:
-
-```
-REQUEST  /live/song/set/tempo   "@id:7"   125.0
-REPLY    /live/song/set/tempo   "@id:7"
-```
-
-A correlated request that **fails** (handler raises, or unknown address) gets a marker-carrying error
-reply on `/live/error`, so the client fails fast instead of timing out:
-
-```
-REQUEST  /live/api/show_message   "@id:8"
-REPLY    /live/error   "@id:8"   "Error handling /live/api/show_message: ..."
-```
-
-**Where it lives:**
-- Server: `abletonosc/osc_server.py`. `CORRELATION_PREFIX = "@id:"` and `LISTEN_TAG_PREFIX = "@tag:"`
-  (module-level so they survive `importlib.reload`). `process_message()` strips a single leading
-  marker — `@id:` into `corr`, or `@tag:` into the per-request tag — via one `if/elif` on `params[0]`
-  (guarded by `MAX_MARKER_LENGTH`); `_reply()` re-prepends it. Both exact-match and wildcard branches
-  route through `_reply()`. The marker-gated ACK fires only for `@id:` commands returning `None`.
-  `_reply_error()` sends the correlated error on `ERROR_ADDRESS`.
-- Client: `client/client.py`. Its prefixes **must match** the server's. `query()` allocates a unique
-  `@id:<n>` token, registers a one-shot waiter keyed by that token, and prepends the marker;
-  `query_all()` collects *all* replies for a token (wildcards). `handle_osc()` is a 3-way demux:
-  `@id:` → one-shot `_pending` waiter, `@tag:` → persistent `_tags` callback, else → address-keyed
-  dispatch (legacy listeners, beat, errors). `query()` **raises** on a reply addressed to
-  `/live/error`. This makes `query()` concurrency-safe, including for the same address.
-
-**Listener tagging (`@tag:`).** A `start_listen` request may carry `@tag:<token>`; every update for
-that listener (the immediate push and all later changes) is prefixed with the tag, so a client can
-demultiplex several listeners on the same getter address. A tagged `start_listen` is confirmed by its
-immediate tagged push (no separate ack — the ACK is gated on `@id:`). Client API:
-`start_listen(address, params, callback)` → handle, `stop_listen(handle)`. Untagged `start_listen` is
-byte-identical to before.
-
-**Multi-client async routing.** `OSCServer` publishes a *per-request context* — `_req_remote_addr` and
-`_req_tag`, set at the top of `process_message` and cleared in a `finally` — readable via
-`current_request_addr()` / `current_request_tag()`. This is safe **only** because of the
-single-threaded tick (one message dispatched fully before the next). Listener registration
-(`handler.py _start_listen`, `track.py _start_mixer_listen`, `device.py` device-parameter listener,
-`song.py` beat) **captures these by value** into the listener's closure, so later async pushes (on
-future ticks, when the context is gone) route to the right client. The listener registry is keyed
-`(prop, tuple(params), client_addr)` with a uniform `(callback, unsubscribe)` value, so two clients
-listening to the same property don't collide. Each handler registers as a component
-(`OSCServer.register_component`); a client detected unreachable on send (`_dead_pending` →
-`_drop_client` → `component.drop_client(addr)`) has all its listeners reaped. Broadcasts use
-`OSCServer.broadcast()` over the bounded `_known_clients` set.
-
-**Invariants to preserve:**
-- The feature is **opt-in and invisible**: a request without a marker behaves exactly as before, an
-  untagged `start_listen` pushes the same untagged shape, and a non-correlated command sends no reply.
-  Don't break this — the suite pins exact non-correlated/untagged reply shapes.
-- The `@id:`/`@tag:` leading-string namespaces are **reserved**; markers are detected purely by prefix
-  on the first arg (length-capped).
-- Handlers never see the marker — encode/decode is centralized in `OSCServer` and the client.
-- Listener closures must capture `remote_addr`/`tag` **at registration** (a local, not a late
-  `self.osc_server._req_*` read), or async pushes mis-route. Beat is the one fan-out exception (one
-  global Live listener → a `_beat_subscribers` map).
-
-**Reload caveat.** `OSCServer` is created once in `Manager.__init__` and is **not** rebuilt by
-`/live/api/reload` (which re-imports modules + rebuilds handlers). So changes to `osc_server.py`
-require a **full Live restart**; handler-only changes hot-reload.
-
-Tests: `tests/test_headless.py` runs the full correlation/routing/tagging/error/teardown protocol with
-**no Ableton** (sys.modules stubs + UDP loopback) — the CI-runnable tier. `tests/test_correlation.py`
-and `tests/test_tagging.py` confirm the same against a real Live instance.
+- **The descriptor is the source of truth.** Don't hardcode LOM knowledge in `jsonrpc.py`;
+  add a descriptor entry and let the dispatcher's `kind`/`compute` machinery serve it. After
+  any descriptor change, regenerate (`tools/export_schema.py`) and keep the battery green.
+- **Single-threaded tick.** No threads/blocking in handler/dispatcher code; the only
+  background thread is the pyzmtp loop, which never touches the LOM.
+- **Subscriptions capture `routing_id` at registration** (a local, by value), or async
+  pushes mis-route. Beat is the one fan-out exception.
+- **Transport changes need a full Live restart** (the server is built once and survives
+  `application.reload`); descriptor/dispatcher changes hot-reload.
+- **No native code in `pyzmtp`** — it must stay pure-Python/stdlib (the static-Python
+  constraint); `tests/test_pyzmtp_vendoring.py` pins this.

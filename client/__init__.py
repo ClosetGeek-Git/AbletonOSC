@@ -1,1 +1,1 @@
-from .client import AbletonOSCClient, TICK_DURATION
+from .jsonrpc_client import JsonRpcClient, LomRpcError

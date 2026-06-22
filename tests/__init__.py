@@ -1,30 +1,9 @@
-import time
-import pytest
-
 #--------------------------------------------------------------------------------
-# Add . to the path so that pythonosc can be imported, enabling unit testing
-# without any external dependencies
+# Test package marker.
+#
+# The headless tiers install the Live / ableton.v2 / _Framework sys.modules stubs via
+# conftest.py (and each tier's own module-level install_live_stubs()), and every tier
+# defines its own fixtures + JSON-RPC client. There is intentionally no global client or
+# /live/api/reload step here -- those were OSC-era and have been retired with the OSC
+# layer (see abletonosc/osc_server.py).
 #--------------------------------------------------------------------------------
-import sys
-sys.path.append(".")
-
-from ..client import AbletonOSCClient, TICK_DURATION
-
-# Live tick is 100ms. TICK_DURATION (imported from client.py) is the single source of
-# truth for that interval plus a short processing buffer; do not redefine it here.
-
-@pytest.fixture(scope="module")
-def client() -> AbletonOSCClient:
-    client = AbletonOSCClient()
-    yield client
-    client.stop()
-
-def wait_one_tick():
-    """
-    Sleep for one Ableton Live tick (100ms).
-    """
-    time.sleep(TICK_DURATION)
-
-c = AbletonOSCClient()
-c.send_message("/live/api/reload")
-c.stop()
