@@ -1,0 +1,1333 @@
+{
+  "application": {
+    "arity": 0,
+    "methods": {
+      "get_log_level": [],
+      "ping": [],
+      "reload": [],
+      "set_log_level": [
+        "level"
+      ],
+      "show_message": [
+        "message"
+      ]
+    },
+    "notes": false,
+    "props": {
+      "average_process_usage": {
+        "compute": "avg_process_usage",
+        "kind": "computed",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "version": {
+        "compute": "version",
+        "kind": "computed",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      }
+    },
+    "special_listeners": []
+  },
+  "clip": {
+    "arity": 2,
+    "methods": {
+      "duplicate_loop": [],
+      "fire": [],
+      "stop": []
+    },
+    "notes": true,
+    "props": {
+      "color": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "color_index": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "end_marker": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "end_time": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": false
+      },
+      "file_path": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": false
+      },
+      "gain": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": true
+      },
+      "gain_display_string": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "has_groove": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "is_audio_clip": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "is_midi_clip": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "is_overdubbing": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": false
+      },
+      "is_playing": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "is_recording": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": false
+      },
+      "is_triggered": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "launch_mode": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "launch_quantization": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "legato": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "length": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "loop_end": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "loop_start": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "looping": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "muted": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "name": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "pitch_coarse": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "pitch_fine": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "playing_position": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": false
+      },
+      "position": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "ram_mode": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "sample_length": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "start_marker": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "start_time": {
+        "compute": null,
+        "kind": "direct",
+        "note": "live12",
+        "observable": true,
+        "readable": true,
+        "writable": false
+      },
+      "velocity_amount": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "warp_mode": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "warping": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "will_record_on_start": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      }
+    },
+    "special_listeners": []
+  },
+  "clip_slot": {
+    "arity": 2,
+    "methods": {
+      "create_audio_clip": [
+        "path"
+      ],
+      "create_clip": [
+        "length"
+      ],
+      "delete_clip": [],
+      "duplicate_clip_to": [
+        "target_track",
+        "target_slot"
+      ],
+      "fire": [],
+      "stop": []
+    },
+    "notes": false,
+    "props": {
+      "controls_other_clips": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": false
+      },
+      "has_clip": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": false
+      },
+      "has_stop_button": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "is_group_slot": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "is_playing": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "is_triggered": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": false
+      },
+      "playing_status": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": false
+      },
+      "will_record_on_start": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      }
+    },
+    "special_listeners": []
+  },
+  "device": {
+    "arity": 2,
+    "methods": {
+      "set_parameters": [
+        "values..."
+      ]
+    },
+    "notes": false,
+    "props": {
+      "class_name": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "is_using_compare_preset_b": {
+        "compute": null,
+        "kind": "direct",
+        "note": "live12",
+        "observable": true,
+        "readable": true,
+        "writable": false
+      },
+      "name": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": false
+      },
+      "num_parameters": {
+        "compute": "len:parameters",
+        "kind": "computed",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "parameter.is_quantized": {
+        "compute": null,
+        "kind": "param",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "parameter.max": {
+        "compute": null,
+        "kind": "param",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "parameter.min": {
+        "compute": null,
+        "kind": "param",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "parameter.name": {
+        "compute": null,
+        "kind": "param",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "parameter.value": {
+        "compute": null,
+        "kind": "param",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "parameter.value_string": {
+        "compute": null,
+        "kind": "param",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "parameters.is_quantized": {
+        "compute": "parameters.is_quantized",
+        "kind": "list",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "parameters.max": {
+        "compute": "parameters.max",
+        "kind": "list",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "parameters.min": {
+        "compute": "parameters.min",
+        "kind": "list",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "parameters.name": {
+        "compute": "parameters.name",
+        "kind": "list",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "parameters.value": {
+        "compute": "parameters.value",
+        "kind": "list",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "type": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      }
+    },
+    "special_listeners": []
+  },
+  "midimap": {
+    "arity": 0,
+    "methods": {
+      "map_cc": [
+        "track",
+        "device",
+        "parameter",
+        "channel",
+        "cc"
+      ]
+    },
+    "notes": false,
+    "props": {},
+    "special_listeners": []
+  },
+  "scene": {
+    "arity": 1,
+    "methods": {
+      "fire": [],
+      "fire_as_selected": [],
+      "fire_selected": []
+    },
+    "notes": false,
+    "props": {
+      "color": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "color_index": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "is_empty": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "is_triggered": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": false
+      },
+      "name": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "tempo": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "tempo_enabled": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "time_signature_denominator": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "time_signature_enabled": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "time_signature_numerator": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      }
+    },
+    "special_listeners": []
+  },
+  "song": {
+    "arity": 0,
+    "methods": {
+      "capture_and_insert_scene": [],
+      "capture_midi": [],
+      "continue_playing": [],
+      "create_audio_track": [
+        "index"
+      ],
+      "create_midi_track": [
+        "index"
+      ],
+      "create_return_track": [],
+      "create_scene": [
+        "index"
+      ],
+      "delete_return_track": [
+        "index"
+      ],
+      "delete_scene": [
+        "index"
+      ],
+      "delete_track": [
+        "index"
+      ],
+      "duplicate_scene": [
+        "index"
+      ],
+      "duplicate_track": [
+        "index"
+      ],
+      "force_link_beat_time": [],
+      "jump_by": [
+        "beats"
+      ],
+      "jump_to_next_cue": [],
+      "jump_to_prev_cue": [],
+      "name_cue": [
+        "time",
+        "name"
+      ],
+      "re_enable_automation": [],
+      "redo": [],
+      "set_or_delete_cue": [],
+      "start_playing": [],
+      "stop_all_clips": [],
+      "stop_playing": [],
+      "tap_tempo": [],
+      "trigger_session_record": [],
+      "undo": []
+    },
+    "notes": false,
+    "props": {
+      "arrangement_overdub": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "back_to_arranger": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "can_redo": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "can_undo": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "clip_trigger_quantization": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "cue_points": {
+        "compute": "cue_points",
+        "kind": "list",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "current_song_time": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "groove_amount": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "is_ableton_link_enabled": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "is_playing": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": false
+      },
+      "loop": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "loop_length": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "loop_start": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "metronome": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "midi_recording_quantization": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "nudge_down": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "nudge_up": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "num_return_tracks": {
+        "compute": "len:return_tracks",
+        "kind": "computed",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "num_scenes": {
+        "compute": "len:scenes",
+        "kind": "computed",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "num_tracks": {
+        "compute": "len:tracks",
+        "kind": "computed",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "punch_in": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "punch_out": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "record_mode": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "root_note": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "scale_intervals": {
+        "compute": null,
+        "kind": "direct",
+        "note": "live12",
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "scale_mode": {
+        "compute": null,
+        "kind": "direct",
+        "note": "live12",
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "scale_name": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "session_record": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "session_record_status": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": false
+      },
+      "signature_denominator": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "signature_numerator": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "song_length": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": false
+      },
+      "tempo": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "tempo_follower_enabled": {
+        "compute": null,
+        "kind": "direct",
+        "note": "live12",
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "track_names": {
+        "compute": "track_names",
+        "kind": "list",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      }
+    },
+    "special_listeners": [
+      "beat"
+    ]
+  },
+  "track": {
+    "arity": 1,
+    "methods": {
+      "delete_clip": [
+        "clip_index"
+      ],
+      "delete_device": [
+        "device_index"
+      ],
+      "insert_device": [
+        "name"
+      ],
+      "load_device": [
+        "name"
+      ],
+      "stop_all_clips": []
+    },
+    "notes": false,
+    "props": {
+      "arm": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "arrangement_clips.length": {
+        "compute": "arrangement_clips.length",
+        "kind": "list",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "arrangement_clips.name": {
+        "compute": "arrangement_clips.name",
+        "kind": "list",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "arrangement_clips.start_time": {
+        "compute": "arrangement_clips.start_time",
+        "kind": "list",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "can_be_armed": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "clips.color": {
+        "compute": "clips.color",
+        "kind": "list",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "clips.length": {
+        "compute": "clips.length",
+        "kind": "list",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "clips.name": {
+        "compute": "clips.name",
+        "kind": "list",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "color": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "color_index": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "current_monitoring_state": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "devices.class_name": {
+        "compute": "devices.class_name",
+        "kind": "list",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "devices.name": {
+        "compute": "devices.name",
+        "kind": "list",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "devices.type": {
+        "compute": "devices.type",
+        "kind": "list",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "fired_slot_index": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": false
+      },
+      "fold_state": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": true
+      },
+      "has_audio_input": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": false
+      },
+      "has_audio_output": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": false
+      },
+      "has_midi_input": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": false
+      },
+      "has_midi_output": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": false
+      },
+      "is_foldable": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "is_grouped": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "is_visible": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "mute": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "name": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "num_devices": {
+        "compute": "len:devices",
+        "kind": "computed",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": false
+      },
+      "output_meter_left": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": false
+      },
+      "output_meter_level": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": false
+      },
+      "output_meter_right": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": false
+      },
+      "panning": {
+        "compute": null,
+        "kind": "mixer",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "playing_slot_index": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": false
+      },
+      "send": {
+        "compute": null,
+        "kind": "send",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "solo": {
+        "compute": null,
+        "kind": "direct",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "volume": {
+        "compute": null,
+        "kind": "mixer",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      }
+    },
+    "special_listeners": []
+  },
+  "view": {
+    "arity": 0,
+    "methods": {},
+    "notes": false,
+    "props": {
+      "selected_clip": {
+        "compute": "selected_clip",
+        "kind": "computed",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": true
+      },
+      "selected_device": {
+        "compute": "selected_device",
+        "kind": "computed",
+        "note": null,
+        "observable": false,
+        "readable": true,
+        "writable": true
+      },
+      "selected_scene": {
+        "compute": "selected_scene",
+        "kind": "computed",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      },
+      "selected_track": {
+        "compute": "selected_track",
+        "kind": "computed",
+        "note": null,
+        "observable": true,
+        "readable": true,
+        "writable": true
+      }
+    },
+    "special_listeners": []
+  }
+}

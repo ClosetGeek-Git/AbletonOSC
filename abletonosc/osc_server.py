@@ -1,237 +1,198 @@
-from typing import Tuple, Any, Callable
-from .constants import OSC_LISTEN_PORT, OSC_RESPONSE_PORT
-from ..pythonosc.osc_message import OscMessage, ParseError
-from ..pythonosc.osc_bundle import OscBundle
-from ..pythonosc.osc_message_builder import OscMessageBuilder, BuildError
+from .constants import OSC_ENDPOINT
+from .zmtp_transport import ZmtpTransport
 
-import re
-import errno
-import socket
+import json
 import logging
 import traceback
 
 #--------------------------------------------------------------------------------
-# Optional request-correlation marker.
+# The plugin's network server.
 #
-# A client may prepend a single reserved string argument of the form
-# "@id:<token>" as the first OSC param of a request. The server strips it before
-# dispatching to any handler and re-prepends the identical string to the reply,
-# so clients can correlate replies (and command acknowledgements) with concurrent
-# in-flight requests. Clients that don't use it are entirely unaffected.
+# It speaks ONE wire: a path-based JSON-RPC envelope (one JSON object per ZMTP frame),
+# the PHP-first RPC the in-house client (closetgeek/stemdj -> Closetgeek\Stemdj\Lom)
+# and the Python JsonRpcClient use. The OSC protocol layer -- vendored pythonosc, the
+# @id:/@tag: string markers, the per-object OSC handlers -- has been RETIRED; JSON-RPC's
+# native id / sub / error carry correlation, subscriptions, and failures directly.
 #
-# Defined at module level so it survives importlib.reload() on /live/api/reload.
+# The transport is a pyzmtp ROUTER on a background asyncio thread (ZmtpTransport),
+# bridged to Live's ~100ms tick by thread-safe queues. Each connected client is
+# identified by its pyzmtp routing-id -- an opaque ``bytes`` token -- the per-client key
+# used everywhere downstream: reply routing, per-listener registration, broadcasts, and
+# dead-client teardown.
+#
+# (The OSCServer name / osc_server.py module / OSC_* constants are kept as the stable
+# transport symbols; only the protocol changed. Changes to THIS module take effect only
+# after a full Live restart -- the Manager builds the server once and /live api reload
+# rebuilds handlers but keeps the running ROUTER + its transport thread.)
 #--------------------------------------------------------------------------------
-CORRELATION_PREFIX = "@id:"
+
+#--------------------------------------------------------------------------------
+# Upper bound on the broadcast client set, to cap memory growth. FIFO eviction.
+#--------------------------------------------------------------------------------
+MAX_KNOWN_CLIENTS = 64
+
 
 class OSCServer:
-    def __init__(self,
-                 local_addr: Tuple[str, int] = ('0.0.0.0', OSC_LISTEN_PORT),
-                 remote_addr: Tuple[str, int] = ('127.0.0.1', OSC_RESPONSE_PORT)):
-        """
-        Class that handles OSC server responsibilities, including support for sending
-        reply messages.
+    def __init__(self, endpoint: str = OSC_ENDPOINT):
+        self._endpoint = endpoint
 
-        Implemented because pythonosc's OSC server causes a beachball when handling
-        incoming messages. To investigate, as it would be ultimately better not to have
-        to roll our own.
+        #--------------------------------------------------------------------------------
+        # Bring up the transport (binds the ROUTER synchronously; raises TransportBindError
+        # on failure). `bound_endpoint` is the actually-bound endpoint (resolves ":0").
+        #--------------------------------------------------------------------------------
+        self._transport = ZmtpTransport(endpoint)
+        self.bound_endpoint = self._transport.bound_endpoint
 
-        Args:
-            local_addr: Local address and port to listen on.
-                        By default, binds to the wildcard address 0.0.0.0, which means listening on
-                        every available local IPv4 interface (including 127.0.0.1).
-            remote_addr: Remote address to send replies to, by default. Can be overridden in send().
-        """
+        #--------------------------------------------------------------------------------
+        # The JSON-RPC dispatcher (set by JsonRpcHandler.init_api). Every inbound frame is
+        # routed to it. Reset on reload by clear_handlers().
+        #--------------------------------------------------------------------------------
+        self.json_dispatcher = None
 
-        self._local_addr = local_addr
-        self._remote_addr = remote_addr
-        self._response_port = remote_addr[1]
+        #--------------------------------------------------------------------------------
+        # Single-client fallback target (last routing-id seen). Per-listener routing uses
+        # the routing-id captured at registration, not this.
+        #--------------------------------------------------------------------------------
+        self._remote_addr = None
 
-        self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self._socket.setblocking(0)
-        self._socket.bind(self._local_addr)
-        self._callbacks = {}
+        #--------------------------------------------------------------------------------
+        # Listener-owning handlers, so a vanished client's subscriptions can be torn down
+        # centrally. Reset in clear_handlers() and rebuilt on reload.
+        #--------------------------------------------------------------------------------
+        self._components = []
+
+        #--------------------------------------------------------------------------------
+        # Clients seen, used for broadcasts (lifecycle events). Bounded.
+        #--------------------------------------------------------------------------------
+        self._known_clients = []
 
         self.logger = logging.getLogger("abletonosc")
-        self.logger.info("Starting OSC server (local %s, response port %d)",
-                         str(self._local_addr), self._response_port)
-
-    def add_handler(self, address: str, handler: Callable) -> None:
-        """
-        Add an OSC handler.
-
-        Args:
-            address: The OSC address string
-            handler: A handler function, with signature:
-                     params: Tuple[Any, ...]
-        """
-        self._callbacks[address] = handler
+        self.logger.info("Starting RPC server (pyzmtp ROUTER on %s)", str(self.bound_endpoint))
 
     def clear_handlers(self) -> None:
         """
-        Remove all existing OSC handlers.
+        Drop the dispatcher hook and component registrations. Rebuilt handlers re-register
+        themselves via register_component() in init_api() (and JsonRpcHandler re-hooks
+        json_dispatcher).
         """
-        self._callbacks = {}
+        self._components = []
+        self.json_dispatcher = None
 
-    def send(self,
-             address: str,
-             params: Tuple = (),
-             remote_addr: Tuple[str, int] = None) -> None:
+    def register_component(self, component) -> None:
         """
-        Send an OSC message.
-
-        Args:
-            address: The OSC address (e.g. /frequency)
-            params: A tuple of zero or more OSC params
-            remote_addr: The remote address to send to, as a 2-tuple (hostname, port).
-                         If None, uses the default remote address.
+        Register a listener-owning handler so that its subscriptions for a given client
+        can be torn down centrally when that client disconnects.
         """
-        msg_builder = OscMessageBuilder(address)
-        for param in params:
-            msg_builder.add_arg(param)
+        if component not in self._components:
+            self._components.append(component)
 
+    def send_json(self, remote_addr, obj) -> None:
+        """
+        Send a single JSON object (one ZMTP frame) to a client by routing-id. Used by the
+        JSON-RPC dispatcher for replies and subscription pushes.
+        """
+        if remote_addr is None:
+            return
         try:
-            msg = msg_builder.build()
-            if remote_addr is None:
-                remote_addr = self._remote_addr
-            self._socket.sendto(msg.dgram, remote_addr)
-        except BuildError:
-            self.logger.error("AbletonOSC: OSC build error: %s" % (traceback.format_exc()))
-
-    def _reply(self, address, rv, corr, remote_addr):
-        """
-        Send a reply for an incoming message.
-
-        If the request carried a correlation marker (`corr`), it is re-prepended
-        so the client can match this reply to the request that caused it. Replies
-        are addressed to the host that sent the request (not the shared default
-        remote address), so correlated request/response works per-client.
-        """
-        assert isinstance(rv, tuple)
-        if corr is not None:
-            rv = (corr, *rv)
-        remote_hostname, _ = remote_addr
-        response_addr = (remote_hostname, self._response_port)
-        self.send(address=address, params=rv, remote_addr=response_addr)
-
-    def process_message(self, message, remote_addr):
+            payload = json.dumps(obj).encode("utf-8")
+        except (TypeError, ValueError):
+            self.logger.error("AbletonOSC: JSON encode error: %s" % (traceback.format_exc()))
+            return
         #--------------------------------------------------------------------------------
-        # Optional request correlation: strip a leading "@id:<token>" marker (if
-        # present) before any handler runs, and re-prepend it to the reply via
-        # _reply(). See CORRELATION_PREFIX above.
-        #
-        # Note: `params` is intentionally left as a list. Do not normalise it to a
-        # tuple centrally without also fixing track.py's create_track_callback,
-        # which does `[track_index] + params[1:]` (list + slice) and would raise
-        # TypeError on a tuple.
+        # Fire-and-forget onto the transport thread. A send to a vanished/unknown routing-id
+        # surfaces async as a HostUnreachable, drained into _drop_client in process().
         #--------------------------------------------------------------------------------
-        params = list(message.params)
-        corr = None
-        if params and isinstance(params[0], str) and params[0].startswith(CORRELATION_PREFIX):
-            corr = params[0]
-            params = params[1:]
+        self._transport.send(remote_addr, payload)
 
-        if message.address in self._callbacks:
-            callback = self._callbacks[message.address]
-            rv = callback(params)
-
-            if rv is not None:
-                self._reply(message.address, rv, corr, remote_addr)
-            elif corr is not None:
-                #--------------------------------------------------------------------------------
-                # Marker-gated acknowledgement: set/method handlers return None and
-                # normally send no reply. When the request is correlated, send an
-                # empty-payload ack so the client can confirm completion instead of
-                # timing out. Non-correlated commands still produce no reply.
-                #--------------------------------------------------------------------------------
-                self._reply(message.address, (), corr, remote_addr)
-        elif "*" in message.address:
-            regex = message.address.replace("*", "[^/]+")
-            for callback_address, callback in self._callbacks.items():
-                if re.match(regex, callback_address):
-                    try:
-                        rv = callback(params)
-                    except ValueError:
-                        #--------------------------------------------------------------------------------
-                        # Don't throw errors for queries that require more arguments
-                        # (e.g. /live/track/get/send with no args)
-                        #--------------------------------------------------------------------------------
-                        continue
-                    except AttributeError:
-                        #--------------------------------------------------------------------------------
-                        # Don't throw errors when trying to create listeners for properties that can't
-                        # be listened for (e.g. can_be_armed, is_foldable)
-                        #--------------------------------------------------------------------------------
-                        continue
-                    if rv is not None:
-                        self._reply(callback_address, rv, corr, remote_addr)
+    def broadcast_json(self, obj) -> None:
+        """
+        Send an unsolicited JSON object to every known client (lifecycle events such as
+        {"event":"error","message":...}). Falls back to the single last-seen client when
+        no broadcast set has built up yet; best-effort if no client has ever been seen, so
+        clients should detect readiness with an active probe ({"op":"ping"}).
+        """
+        if self._known_clients:
+            targets = list(self._known_clients)
+        elif self._remote_addr is not None:
+            targets = [self._remote_addr]
         else:
-            self.logger.error("AbletonOSC: Unknown OSC address: %s" % message.address)
+            targets = []
+        for addr in targets:
+            self.send_json(addr, obj)
 
-    def process_bundle(self, bundle, remote_addr):
-        for i in bundle:
-            if OscBundle.dgram_is_bundle(i.dgram):
-                self.process_bundle(i, remote_addr)
-            else:
-                self.process_message(i, remote_addr)
+    def dispatch_frame(self, data, remote_addr) -> None:
+        """
+        Route an inbound frame to the JSON-RPC dispatcher. Every frame is a JSON envelope;
+        if no dispatcher is registered the frame is a no-op error (logged).
+        """
+        if self.json_dispatcher is None:
+            self.logger.error("AbletonOSC: frame received but no JSON-RPC dispatcher is registered")
+            return
+        try:
+            self.json_dispatcher.handle(data, remote_addr)
+        except Exception:
+            self.logger.error("AbletonOSC: JSON-RPC dispatch error: %s" % (traceback.format_exc()))
 
-    def parse_bundle(self, data, remote_addr):
-        if OscBundle.dgram_is_bundle(data):
+    def _note_client(self, remote_addr):
+        #--------------------------------------------------------------------------------
+        # Record a client (by routing-id) for broadcasts. Bounded, FIFO eviction.
+        #--------------------------------------------------------------------------------
+        if remote_addr not in self._known_clients:
+            self._known_clients.append(remote_addr)
+            if len(self._known_clients) > MAX_KNOWN_CLIENTS:
+                self._known_clients.pop(0)
+
+    def _drop_client(self, addr):
+        #--------------------------------------------------------------------------------
+        # Tear down every listener registered by `addr`, across all components, and forget
+        # the client. Called when a peer disconnects (pyzmtp event) or a send to it fails.
+        #--------------------------------------------------------------------------------
+        for component in list(self._components):
             try:
-                bundle = OscBundle(data)
-                self.process_bundle(bundle, remote_addr)
-            except ParseError:
-                self.logger.error("AbletonOSC: Error parsing OSC bundle: %s" % (traceback.format_exc()))
-        else:
-            try:
-                message = OscMessage(data)
-                self.process_message(message, remote_addr)
-            except ParseError:
-                self.logger.error("AbletonOSC: Error parsing OSC message: %s" % (traceback.format_exc()))
+                component.drop_client(addr)
+            except Exception as e:
+                self.logger.info("AbletonOSC: Exception dropping client %s: %s" % (str(addr), e))
+        if addr in self._known_clients:
+            self._known_clients.remove(addr)
 
     def process(self) -> None:
         """
-        Synchronously process all data queued on the OSC socket.
+        Drain the transport bridge queues (populated on the background asyncio thread) and
+        dispatch -- pure queue operations, no socket I/O, no blocking. Called once per tick.
         """
         try:
-            repeats = 0
-            while True:
-                #--------------------------------------------------------------------------------
-                # Loop until no more data is available.
-                #--------------------------------------------------------------------------------
-                data, remote_addr = self._socket.recvfrom(65536)
-                #--------------------------------------------------------------------------------
-                # Update the default reply address to the most recent client. Used when
-                # sending (e.g) /live/song/beat messages and listen updates.
-                #
-                # This is slightly ugly and prevents registering listeners from different IPs.
-                #--------------------------------------------------------------------------------
-                self._remote_addr = (remote_addr[0], OSC_RESPONSE_PORT)
-                self.parse_bundle(data, remote_addr)
+            #--------------------------------------------------------------------------------
+            # Inbound frames: (routing_id, payload). Update the single-client fallback +
+            # broadcast set, then dispatch to the JSON-RPC handler.
+            #--------------------------------------------------------------------------------
+            for routing_id, frame in self._transport.drain_inbound():
+                self._remote_addr = routing_id
+                self._note_client(routing_id)
+                self.dispatch_frame(frame, routing_id)
 
-        except socket.error as e:
-            if e.errno == errno.ECONNRESET:
-                #--------------------------------------------------------------------------------
-                # This benign error seems to occur on startup on Windows
-                #--------------------------------------------------------------------------------
-                self.logger.warning("AbletonOSC: Non-fatal socket error: %s" % (traceback.format_exc()))
-            elif e.errno == errno.EAGAIN or e.errno == errno.EWOULDBLOCK:
-                #--------------------------------------------------------------------------------
-                # Another benign networking error, throw when no data is received
-                # on a call to recvfrom() on a non-blocking socket
-                #--------------------------------------------------------------------------------
-                pass
-            else:
-                #--------------------------------------------------------------------------------
-                # Something more serious has happened
-                #--------------------------------------------------------------------------------
-                self.logger.error("AbletonOSC: Socket error: %s" % (traceback.format_exc()))
+            #--------------------------------------------------------------------------------
+            # Peer lifecycle: connect -> remember for broadcasts; disconnect -> identity-correct
+            # listener teardown.
+            #--------------------------------------------------------------------------------
+            for evt in self._transport.drain_events():
+                if evt.kind == "connect":
+                    self._note_client(evt.routing_id)
+                elif evt.kind == "disconnect":
+                    self._drop_client(evt.routing_id)
+
+            #--------------------------------------------------------------------------------
+            # Sends that failed with HostUnreachable (vanished/unknown routing-id): reap.
+            #--------------------------------------------------------------------------------
+            for routing_id in self._transport.drain_send_failures():
+                self._drop_client(routing_id)
 
         except Exception as e:
-            self.logger.error("AbletonOSC: Error handling OSC message: %s" % e)
+            self.logger.error("AbletonOSC: Error processing transport: %s" % e)
             self.logger.warning("AbletonOSC: %s" % traceback.format_exc())
 
     def shutdown(self) -> None:
         """
-        Shutdown the server network sockets.
+        Tear down the transport (closes the ROUTER, stops the asyncio loop, joins the
+        thread) deterministically -- no port/thread leak on Live shutdown.
         """
-        self._socket.close()
+        self._transport.shutdown()
