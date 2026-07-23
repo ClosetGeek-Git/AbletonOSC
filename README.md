@@ -188,6 +188,16 @@ A Python 3.11 venv with `pyzmq` + `pytest` is checked in at `.venv311/`. Tiers:
 - **T2 — live, on-demand, human-attended**: the descriptor-driven battery against real Live
   12 + a hand-authored canonical project (see [`tests/fixtures/MANIFEST.md`](tests/fixtures/MANIFEST.md)).
 
+**Shared dev server.** [`tests/devserver.py`](tests/devserver.py) extracts the T1 rig into a
+standalone, long-lived process — the same fake LOM (`build_song`), the same real
+`OSCServer`/`JsonRpcHandler` — so a non-Python client can drive the real dispatcher over a
+real ZMQ wire without Live running at all. This is what lets the in-house PHP client's own
+PHPUnit suite (`Closetgeek\Stemdj\Lom`, in a sibling project) assert against the exact same
+fixture the Python tiers do, rather than a second, hand-maintained one. Run it standalone
+with `python -m AbletonOSC.tests.devserver`; it binds an ephemeral port, prints `PORT <n>` on
+startup for the spawning harness to discover it, and accepts one test-only control op,
+`{"op":"__reset__"}`, to rebuild the fixture between tests (never reaches the dispatcher).
+
 Run the headless tiers:
 
 ```
