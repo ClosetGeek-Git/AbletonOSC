@@ -28,8 +28,9 @@ wire-compatible with it.
 ## The single source of truth
 
 [`abletonosc/lom_schema.py`](abletonosc/lom_schema.py) is a **pure-data descriptor** of the
-entire exposed LOM surface (9 objects, 144 properties, 46 methods). It is the one place LOM
-knowledge lives, and it drives three consumers:
+entire exposed LOM surface (9 objects, 144 properties, 50 methods — verify by calling
+`export_schema()` directly rather than trusting a cached count, this one has drifted before).
+It is the one place LOM knowledge lives, and it drives three consumers:
 
 - the **dispatcher** (`jsonrpc.py`) interprets it to serve `get`/`set`/`call`/`subscribe`;
 - the **test battery** (`tests/test_jsonrpc.py`) iterates it for provably-complete coverage;
@@ -175,6 +176,18 @@ The suite is **descriptor-driven** so coverage is provably complete and self-mai
 Run headless: `.venv311/bin/python -m pytest tests/ -q`. The Live stubs are installed by
 `tests/conftest.py` before collection, plus each headless module's own `install_live_stubs()`.
 
+**`tests/devserver.py`** extracts the T1 rig into a standalone, long-lived process — reusing,
+unchanged, `tests.test_jsonrpc.build_song`/`FakeManager`/`_install_live_stubs` (the fake LOM)
+plus the real `OSCServer`/`JsonRpcHandler`. This is what lets a **non-Python client** — the
+in-house PHP `Closetgeek\Stemdj\Lom` PHPUnit suite, in the sibling `php_root` repo — drive the
+real dispatcher over a real ZMQ wire against the exact same fixture the Python tiers assert
+on. Run standalone with `python -m AbletonOSC.tests.devserver`; it binds an ephemeral port,
+prints `PORT <n>` on startup, confirms readiness via `{"op":"ping"}`, and accepts one
+test-only control op intercepted before the dispatcher — `{"op":"__reset__"}` (detach
+listeners + rebuild the fixture, for per-test isolation) — which never reaches
+`JsonRpcHandler`. See [core/docs/AbletonBridge/17-test-tiers-and-the-shared-harness.md](/Users/jason/Documents/dev/MacosVDJPort/core/docs/AbletonBridge/17-test-tiers-and-the-shared-harness.md)
+for the full picture across both languages.
+
 ## Invariants to preserve
 
 - **The descriptor is the source of truth.** Don't hardcode LOM knowledge in `jsonrpc.py`;
@@ -188,3 +201,14 @@ Run headless: `.venv311/bin/python -m pytest tests/ -q`. The Live stubs are inst
   `application.reload`); descriptor/dispatcher changes hot-reload.
 - **No native code in `pyzmtp`** — it must stay pure-Python/stdlib (the static-Python
   constraint); `tests/test_pyzmtp_vendoring.py` pins this.
+
+## Cross-references
+
+- **The PHP client**: `/Users/jason/Documents/dev/MacosVDJPort/php_root/src/Lom/`
+  (`Closetgeek\Stemdj\Lom`) — a ReactPHP DEALER client for the VDJ-plugin PHP userspace,
+  wire-compatible with this repo's ROUTER. Its `LomSchema.php` reads this repo's exported
+  `lom_schema.json`; its `tests/Lom/` PHPUnit suite drives this repo's `tests/devserver.py`
+  over a real ZMQ wire. See `php_root/CLAUDE.md`'s "Ableton bridge (`src/Lom/`)" section.
+- **The didactic doc set**: `/Users/jason/Documents/dev/MacosVDJPort/core/docs/AbletonBridge/`
+  — a 20-chapter set covering this repo and the PHP client together as one bridge, since
+  they're the two ends of one wire sharing one descriptor and one test harness.
